@@ -1,28 +1,22 @@
-# Dockerfile
 
 # Stage 1: Base with UV and a Virtual Environment
-FROM python:3.11-slim AS base
+FROM python:3.13-slim AS base
 ENV UV_VENV=/opt/venv
 # Install uv and create a virtual environment
 RUN python -m pip install --no-cache-dir uv \
     && python -m uv venv ${UV_VENV}
-# Add the venv to the PATH
+# Add the venv to the PATH for subsequent stages
 ENV PATH="${UV_VENV}/bin:$PATH"
 
 # Stage 2: Builder - Install dependencies
 FROM base AS builder
-
-# --- Install build tools needed for compiling packages like psutil ---
+# Install build tools needed for compiling packages like psutil
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /build
-
-# Copy only the dependency definition
 COPY pyproject.toml .
-
 # Install dependencies into the virtual environment using uv
 RUN uv pip install --no-cache --system --strict .
 
@@ -35,6 +29,9 @@ RUN groupadd -r appuser --gid=1001 && \
 
 # Copy the virtual environment with installed dependencies from the builder stage
 COPY --from=builder --chown=appuser:appuser ${UV_VENV} ${UV_VENV}
+
+# This ensures the shell can find executables like 'uvicorn' inside the venv.
+ENV PATH="/opt/venv/bin:$PATH"
 
 # Create and set permissions for data and app directories
 WORKDIR /app
