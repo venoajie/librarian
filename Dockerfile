@@ -34,20 +34,20 @@ COPY --from=builder --chown=appuser:appuser ${UV_VENV} ${UV_VENV}
 # Set the PATH to include the venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Set the working directory
+# 1. Set the WORKDIR to be the project root
 WORKDIR /app
 
-# Create and set permissions for data directory
+# 2. Create and set permissions for the data directory
 RUN mkdir -p /data/chroma && \
     chown -R appuser:appuser /data
+
+# 3. Copy the 'app' package INTO the WORKDIR, creating the /app/app structure
+COPY --chown=appuser:appuser ./app ./app
+
+# 4. Switch to the non-root user
 USER appuser
 
-# --- FIX: Copy the CONTENTS of the app directory, not the directory itself ---
-# Note the trailing slash on './app/'
-COPY --chown=appuser:appuser ./app/ .
-# --- END FIX ---
-
-# Set environment variables
+# Set environment variables. PYTHONPATH points to the project root.
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONPYCACHEPREFIX=/tmp/.pycache
@@ -57,5 +57,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
   CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# The command now correctly finds 'app.main' because 'main.py' is in the WORKDIR
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# This command now works because PYTHONPATH is /app, and it can find the 'app.main' module.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
