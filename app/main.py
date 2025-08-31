@@ -61,14 +61,13 @@ async def lifespan(app: FastAPI):
     archive_path = Path("/tmp/index.tar.gz")
     index_path = Path(settings.CHROMA_DB_PATH)
     
-    index_manager._mock_oci_download(archive_path)
-    downloaded = True
+    #index_manager._mock_oci_download(archive_path)
+    downloaded =  index_manager.download_index_from_oci(archive_path)
 
     if downloaded and index_manager.unpack_index(archive_path, index_path):
         try:
             chroma_client = chromadb.PersistentClient(path=str(index_path))
             app.state.chroma_collection = chroma_client.get_or_create_collection(name=settings.CHROMA_COLLECTION_NAME)
-            app.state.chroma_collection.add(documents=["This is a sample document about authentication."], metadatas=[{"source": "auth.py"}], ids=["doc1"])
             
             app.state.index_status = IndexStatus.LOADED
             app.state.index_last_modified = datetime.utcnow()
