@@ -1,5 +1,8 @@
+# Dockerfile
+
 # Stage 1: Base with UV and a Virtual Environment
 FROM python:3.12-slim AS base
+
 ENV UV_VENV=/opt/venv
 # Install uv and create a virtual environment
 RUN python -m pip install --no-cache-dir uv \
@@ -16,14 +19,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY pyproject.toml .
+# Install dependencies into the venv
 RUN uv pip install --no-cache --strict .
 
 # Stage 3: Runtime - Final, lean image
 FROM base AS runtime
 
-# Create a non-root user with a specific UID/GID for security
+# --- FIX: Add the '-m' flag to create the user's home directory ---
 RUN groupadd -r appuser --gid=1001 && \
-    useradd -r -g appuser --uid=1001 appuser
+    useradd -r -m -g appuser --uid=1001 appuser
+# --- END FIX ---
 
 # Copy the virtual environment with installed dependencies from the builder stage
 COPY --from=builder --chown=appuser:appuser ${UV_VENV} ${UV_VENV}
@@ -31,17 +36,19 @@ COPY --from=builder --chown=appuser:appuser ${UV_VENV} ${UV_VENV}
 # This ensures the shell can find executables like 'uvicorn' inside the venv.
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Create and set permissions for data and app directories
-WORKDIR /app
+# Set the working directory AFTER the user is created
+WORKDIR /home/appuser/app
+
+# Create and set permissions for data directory
 RUN mkdir -p /data/chroma && \
-    chown -R appuser:appuser /app /data
+    chown -R appuser:appuser /data
 USER appuser
 
-# Copy application code
-COPY --chown=appuser:appuser ./app ./app
+# Copy application code into the working directory
+COPY --chown=appuser:appuser ./app .
 
-# Set environment variables for better logging and to avoid writing .pyc files in the app dir
-ENV PYTHONPATH=/app \
+# Set environment variables for better logging and to avoid writing .pyc files
+ENV PYTHONPATH=/home/appuser/app \
     PYTHONUNBUFFERED=1 \
     PYTHONPYCACHEPREFIX=/tmp/.pycache
 
