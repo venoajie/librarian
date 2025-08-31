@@ -1,3 +1,4 @@
+# Dockerfile
 
 # Stage 1: Base with UV and a Virtual Environment
 FROM python:3.11-slim AS base
@@ -10,6 +11,13 @@ ENV PATH="${UV_VENV}/bin:$PATH"
 
 # Stage 2: Builder - Install dependencies
 FROM base AS builder
+
+# --- Install build tools needed for compiling packages like psutil ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 
 # Copy only the dependency definition
