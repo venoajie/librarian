@@ -1,5 +1,5 @@
 # Stage 1: Base with UV and a Virtual Environment
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 ENV UV_VENV=/opt/venv
 # Install uv and create a virtual environment
 RUN python -m pip install --no-cache-dir uv \
@@ -16,8 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY pyproject.toml .
-# Install dependencies into the virtual environment using uv
-RUN uv pip install --no-cache --system --strict .
+RUN uv pip install --no-cache --strict .
 
 # Stage 3: Runtime - Final, lean image
 FROM base AS runtime
