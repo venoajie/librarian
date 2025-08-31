@@ -1,7 +1,8 @@
 # Dockerfile
 
 # Stage 1: Base with UV and a Virtual Environment
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
+
 ENV UV_VENV=/opt/venv
 # Install uv and create a virtual environment
 RUN python -m pip install --no-cache-dir uv \
@@ -34,28 +35,28 @@ COPY --from=builder --chown=appuser:appuser ${UV_VENV} ${UV_VENV}
 # Set the PATH to include the venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# 1. Set the WORKDIR to be the project root
+# Set up the project structure and permissions
 WORKDIR /app
-
-# 2. Create and set permissions for the data directory
 RUN mkdir -p /data/chroma && \
     chown -R appuser:appuser /data
 
-# 3. Copy the 'app' package INTO the WORKDIR, creating the /app/app structure
+# Copy the 'app' package INTO the WORKDIR
 COPY --chown=appuser:appuser ./app ./app
 
-# 4. Switch to the non-root user
+RUN chown -R appuser:appuser /app
+
+# Switch to the non-root user
 USER appuser
 
-# Set environment variables. PYTHONPATH points to the project root.
+# Set environment variables
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONPYCACHEPREFIX=/tmp/.pycache
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
   CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# This command now works because PYTHONPATH is /app, and it can find the 'app.main' module.
+# The command now correctly finds 'app.main' because PYTHONPATH is /app
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
