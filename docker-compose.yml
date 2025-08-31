@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
-    env_file: .env.dev
+    env_file: .env
     secrets:
       - librarian_api_key
     environment:
@@ -53,7 +53,7 @@ volumes:
     driver_opts:
       type: none
       o: bind
-      device: /data/librarian/chroma 
+      device: /data/librarian/chroma # This is the critical line
   librarian_redis_data:
 
 secrets:

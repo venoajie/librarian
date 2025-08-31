@@ -6,7 +6,11 @@ from typing import Optional
 
 class Settings(BaseSettings):
     """Librarian Service Configuration loaded from environment variables and secrets."""
-    model_config = SettingsConfigDict(env_file=".env.dev", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8", 
+        extra="ignore",
+        )
 
     # Service Metadata
     SERVICE_VERSION: str = Field("1.0.0", env="SERVICE_VERSION")
