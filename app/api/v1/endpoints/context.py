@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
     summary="Retrieve Codebase Context",
     tags=["Core"]
 )
-@limiter.limit(settings.RATE_LIMIT_TIMEFRAME, on_breach=lambda scope: scope.app.state.limiter.on_breach(scope))
+@limiter.limit(settings.RATE_LIMIT_TIMEFRAME)
 async def get_context(
     request: Request,
     body: ContextRequest,
