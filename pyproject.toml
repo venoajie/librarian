@@ -9,7 +9,6 @@ dependencies = [
     "oci==2.123.0",
     "orjson==3.10.18",
     "pydantic==2.6.3",
-    "pydantic==2.11.5",
     "pydantic-settings==2.3.0",
     "psutil==7.0.0",
     "redis==5.0.4",
