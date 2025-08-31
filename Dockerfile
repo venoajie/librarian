@@ -1,6 +1,6 @@
 
 # Stage 1: Base with UV and a Virtual Environment
-FROM python:3.13-slim AS base
+FROM python:3.12-slim AS base
 ENV UV_VENV=/opt/venv
 # Install uv and create a virtual environment
 RUN python -m pip install --no-cache-dir uv \
