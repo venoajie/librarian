@@ -1,7 +1,7 @@
 #  app\main.py
 
 import uvloop
-uvloop.install() # Must be the first import
+uvloop.install() 
 
 import logging
 import redis.asyncio as redis
@@ -12,16 +12,14 @@ from fastapi.responses import ORJSONResponse
 from pathlib import Path
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
-
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from app.core.limiter import limiter
 from app.core.config import settings
 from app.api.v1.router import api_router
 from app.models.schemas import IndexStatus
 from app.core import index_manager
-from app.api.v1.endpoints.context import limiter as context_limiter
 
 # --- Setup Logging ---
 logging.basicConfig(
@@ -92,12 +90,6 @@ async def lifespan(app: FastAPI):
         await app.state.redis_client.close()
         logger.info("Redis connection closed.")
 
-# --- FastAPI App Initialization ---
-limiter = Limiter(
-    key_func=get_remote_address, 
-    enabled=settings.RATE_LIMIT_ENABLED,
-    )
-
 app = FastAPI(
     title="Librarian RAG Service",
     description="A centralized service for retrieving codebase context.",
@@ -110,7 +102,6 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-context_limiter.limiter = limiter
 
 app.include_router(api_router, prefix="/api/v1")
 

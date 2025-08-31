@@ -5,13 +5,11 @@ import time
 import logging
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+
 from app.models.schemas import ContextRequest, ContextResponse, ContextChunk
 from app.core.dependencies import get_api_key
 from app.core.config import settings
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
+from app.core.limiter import limiter
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
