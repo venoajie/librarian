@@ -2,7 +2,6 @@
 
 # Stage 1: Base with UV and a Virtual Environment
 FROM python:3.11-slim AS base
-
 ENV UV_VENV=/opt/venv
 # Install uv and create a virtual environment
 RUN python -m pip install --no-cache-dir uv \
@@ -25,30 +24,31 @@ RUN uv pip install --no-cache --strict .
 # Stage 3: Runtime - Final, lean image
 FROM base AS runtime
 
-# --- FIX: Add the '-m' flag to create the user's home directory ---
+# Create the user's home directory
 RUN groupadd -r appuser --gid=1001 && \
     useradd -r -m -g appuser --uid=1001 appuser
-# --- END FIX ---
 
-# Copy the virtual environment with installed dependencies from the builder stage
+# Copy the virtual environment
 COPY --from=builder --chown=appuser:appuser ${UV_VENV} ${UV_VENV}
 
-# This ensures the shell can find executables like 'uvicorn' inside the venv.
+# Set the PATH to include the venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Set the working directory AFTER the user is created
-WORKDIR /home/appuser/app
+# Set the working directory
+WORKDIR /app
 
 # Create and set permissions for data directory
 RUN mkdir -p /data/chroma && \
     chown -R appuser:appuser /data
 USER appuser
 
-# Copy application code into the working directory
-COPY --chown=appuser:appuser ./app .
+# --- FIX: Copy the CONTENTS of the app directory, not the directory itself ---
+# Note the trailing slash on './app/'
+COPY --chown=appuser:appuser ./app/ .
+# --- END FIX ---
 
-# Set environment variables for better logging and to avoid writing .pyc files
-ENV PYTHONPATH=/home/appuser/app \
+# Set environment variables
+ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONPYCACHEPREFIX=/tmp/.pycache
 
@@ -57,4 +57,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
   CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# The command now correctly finds 'app.main' because 'main.py' is in the WORKDIR
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
