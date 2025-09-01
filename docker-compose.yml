@@ -1,4 +1,5 @@
 # docker-compose.yml
+
 services:
   librarian:
     build:
@@ -12,7 +13,6 @@ services:
     secrets:
       - librarian_api_key
     environment:
-      # Pass the path to the secret file, not the secret itself
       - LIBRARIAN_API_KEY_FILE=/run/secrets/librarian_api_key
       - REDIS_URL=redis://redis:6379/0
     depends_on:
@@ -27,12 +27,11 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      # Give the service 90 seconds to start up, download the index,
-      # and load the models before the health check starts failing.
       start_period: 90s
-    # Example resource limits for production, based on trading app pattern
-    # mem_limit: 4g
-    # mem_reservation: 2g
+    # This is not an example, this is now a requirement.
+    mem_limit: 8g
+    mem_reservation: 4g
+    cpus: '2.0'
 
   redis:
     image: redis:7.2-alpine
