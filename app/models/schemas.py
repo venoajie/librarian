@@ -40,7 +40,7 @@ class ContextRequest(BaseModel):
 class ContextChunk(BaseModel):
     content: str
     metadata: dict[str, Any]
-    score: float = Field(..., ge=0.0, le=1.0)
+    score: float
 
 class ContextResponse(BaseModel):
     query_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
