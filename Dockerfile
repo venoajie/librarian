@@ -32,22 +32,23 @@ COPY --from=builder --chown=appuser:appuser ${UV_VENV} ${UV_VENV}
 ENV PATH="/opt/venv/bin:$PATH"
 
 # --- THE DEFINITIVE FILE STRUCTURE SETUP ---
-# 1. Set the working directory to /app
+# 1. Set the WORKDIR to be the project root, /app.
 WORKDIR /app
 
-# 2. Copy the CONTENTS of the local './app' directory into the container's /app directory.
-#    The trailing slash on './app/' is critical. This creates a flat structure like /app/main.py.
-COPY --chown=appuser:appuser ./app/ .
+# 2. Create the data directory.
+RUN mkdir -p /data/chroma
 
-# 3. Create the data directory and set all ownership correctly
-RUN mkdir -p /data/chroma && \
-    chown -R appuser:appuser /app /data
+# 3. Copy the local 'app' directory INTO the WORKDIR, creating the required /app/app structure.
+COPY --chown=appuser:appuser ./app ./app
 
-# 4. Switch to the non-root user
+# 4. Set ownership for all project and data directories.
+RUN chown -R appuser:appuser /app /data
+
+# 5. Switch to the non-root user.
 USER appuser
 # --- END FILE STRUCTURE SETUP ---
 
-# Set environment variables
+# Set PYTHONPATH to the project root so Python can find the 'app' package.
 ENV PYTHONPATH=/app \
     PYTHONUNBUFFERED=1 \
     PYTHONPYCACHEPREFIX=/tmp/.pycache
@@ -57,5 +58,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
   CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# This command now works because the WORKDIR is /app and main.py is directly inside it.
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# This command now works because PYTHONPATH is /app, and it can find the 'app.main' module.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
