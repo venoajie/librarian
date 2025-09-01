@@ -27,7 +27,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 90s
+      start_period: 300s
     # This is not an example, this is now a requirement.
     mem_limit: 8g
     mem_reservation: 4g
