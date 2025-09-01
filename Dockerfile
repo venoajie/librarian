@@ -4,49 +4,48 @@
 FROM python:3.12-slim AS base
 
 ENV UV_VENV=/opt/venv
-# Install uv and create a virtual environment
 RUN python -m pip install --no-cache-dir uv \
     && python -m uv venv ${UV_VENV}
-# Add the venv to the PATH for subsequent stages
 ENV PATH="${UV_VENV}/bin:$PATH"
 
 # Stage 2: Builder - Install dependencies
 FROM base AS builder
-# Install build tools needed for compiling packages like psutil
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
 COPY pyproject.toml .
-# Install dependencies into the venv
 RUN uv pip install --no-cache --strict .
 
 # Stage 3: Runtime - Final, lean image
 FROM base AS runtime
 
-# Create the user's home directory
+# Create the user with a home directory
 RUN groupadd -r appuser --gid=1001 && \
     useradd -r -m -g appuser --uid=1001 appuser
 
-# Copy the virtual environment
+# Copy the populated virtual environment
 COPY --from=builder --chown=appuser:appuser ${UV_VENV} ${UV_VENV}
 
 # Set the PATH to include the venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Set up the project structure and permissions
+# --- THE DEFINITIVE FILE STRUCTURE SETUP ---
+# 1. Set the working directory to /app
 WORKDIR /app
+
+# 2. Copy the CONTENTS of the local './app' directory into the container's /app directory.
+#    The trailing slash on './app/' is critical. This creates a flat structure like /app/main.py.
+COPY --chown=appuser:appuser ./app/ .
+
+# 3. Create the data directory and set all ownership correctly
 RUN mkdir -p /data/chroma && \
-    chown -R appuser:appuser /data
+    chown -R appuser:appuser /app /data
 
-# Copy the 'app' package INTO the WORKDIR
-COPY --chown=appuser:appuser ./app ./app
-
-RUN chown -R appuser:appuser /app
-
-# Switch to the non-root user
+# 4. Switch to the non-root user
 USER appuser
+# --- END FILE STRUCTURE SETUP ---
 
 # Set environment variables
 ENV PYTHONPATH=/app \
@@ -58,5 +57,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
   CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# The command now correctly finds 'app.main' because PYTHONPATH is /app
+# This command now works because the WORKDIR is /app and main.py is directly inside it.
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
