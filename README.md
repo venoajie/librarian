@@ -20,26 +20,115 @@ A standalone, containerized FastAPI service that acts as a centralized, secure, 
 
 ## Deployment & Operations
 
+
+# Librarian RAG Service (v1.0.0)
+
+**Project ID:** `PROJ-LIBRARIAN-DECOUPLE`
+**Status:** `Production Ready`
+
+A standalone, containerized FastAPI service that acts as a centralized, secure, and maintainable source of contextual information for all development tools and agents.
+
+## Deployment & Operations
+
 ### 1. Prerequisites
 - Docker & Docker Compose
-- An OCI account with an Object Storage bucket containing the `index.tar.gz` file.
-- A running Redis instance (can be deployed via the provided Docker Compose file).
+- An OCI account with an Object Storage bucket.
+- A running Redis instance.
+- OCI credentials configured on the host machine.
 
-### 2. Configuration
-Copy `.env.example` to `.env` and populate it with your production values. Pay special attention to `LIBRARIAN_API_KEY`, `OCI_BUCKET_NAME`, and `REDIS_URL`.
-
-### 3. Running with Docker Compose (Recommended)
-This method starts the Librarian service and its Redis dependency together.
+### 2. Host Preparation (First-Time Setup)
+Before the first deployment, prepare the host environment.
 
 ```bash
-# Start the services in detached mode
-docker-compose up --build -d
+# 1. Create a system-level directory for OCI credentials to avoid SELinux issues.
+sudo mkdir -p /opt/oci
 
-# To view logs
-docker-compose logs -f librarian
+# 2. Copy your OCI config and key file to the new location.
+#    (Replace 'oci_api_key.pem' if your key file has a different name)
+sudo cp ~/.oci/config ~/.oci/oci_api_key.pem /opt/oci/
 
-# To stop the services
-docker-compose down
+# 3. IMPORTANT: Edit the config file to use a portable path for the key_file.
+#    Change 'key_file=/home/opc/.oci/oci_api_key.pem' to 'key_file=~/.oci/oci_api_key.pem'
+sudo nano /opt/oci/config
+
+# 4. Set secure but readable permissions.
+sudo chmod 644 /opt/oci/config
+sudo chmod 644 /opt/oci/oci_api_key.pem
+
+# 5. Create the host directory for the persistent ChromaDB volume.
+sudo mkdir -p /data/librarian/chroma
+sudo chown <your_user>:<your_group> /data/librarian/chroma # e.g., sudo chown opc:opc ...
+```
+
+### 3. Running with Docker Compose
+```bash
+# 1. Create the secrets file (only needed once).
+mkdir -p secrets
+echo -n "your-super-secret-key-here" > ./secrets/librarian_api_key.txt
+
+# 2. Create and configure your .env file.
+cp .env.example .env
+nano .env # Set your OCI_BUCKET_NAME
+
+# 3. Build and start the services.
+docker compose up --build -d
+```
+
+## Index Management
+
+The service consumes a pre-built index from OCI. Use the provided `create_index.py` script to generate this index.
+
+```bash
+# 1. Install script dependencies (run once)
+pip install chromadb sentence-transformers langchain tqdm
+
+# 2. Run the script, pointing it at the source code you want to index.
+#    Ensure you are in the correct directory and using the correct path.
+python create_index.py /path/to/your/project/src
+
+# 3. Upload the resulting index.tar.gz to your OCI bucket.
+#    (Use the 'oci os object put' command)
+```
+
+## **NEW:** Troubleshooting / Operational Runbook
+
+This service is robust but operates in a complex environment. If you encounter issues, consult this guide.
+
+### Symptom: `context: []` or Incorrect Context is Returned
+This is the most common and subtle failure mode. It means the service is running, but the index is empty, corrupted, or mismatched.
+
+**Cause:** A stale or incorrectly generated index is being loaded. This can be caused by a stale Docker cache, a stale bind mount, or an old index file in OCI.
+
+**Solution: The "Clean Room" Reset Procedure.**
+This sequence is the definitive way to reset the service to a known-good state. It wipes all local state and forces a fresh pull from your cloud source of truth.
+
+```bash
+# 1. Stop the service and PERMANENTLY DELETE all persistent data volumes.
+docker compose down -v
+
+# 2. Manually delete the host bind mount directory to ensure it's gone.
+sudo rm -rf /data/librarian/chroma
+
+# 3. Re-create the empty host directory with correct permissions.
+mkdir -p /data/librarian/chroma
+sudo chown <your_user>:<your_group> /data/librarian/chroma
+
+# 4. Re-generate and re-upload a fresh index to OCI using create_index.py.
+#    (This is a critical step to ensure the cloud artifact is not stale).
+
+# 5. Force a full, no-cache rebuild and restart the service.
+#    The --no-cache flag is CRITICAL to avoid using old, broken code layers.
+docker compose build --no-cache
+docker compose up -d
+```
+
+### Symptom: OCI `ConfigFileNotFound` Error on Startup
+**Cause:** The container cannot access the OCI configuration files mounted from the host, typically due to strict SELinux policies on the user's home directory.
+**Solution:** Do not mount from `~/.oci`. Use the recommended host preparation step to place credentials in `/opt/oci` and update `docker-compose.yml` to mount from there.
+
+### Symptom: `PermissionError` on Startup
+**Cause:** The non-root `appuser` inside the container does not have permission to write to its working directory or cache.
+**Solution:** This is a `Dockerfile` bug. Ensure the `Dockerfile` includes steps to create the user's home directory (`useradd -m`) and `chown` the application's working directory.
 ```
 
 ### 4. Monitoring (Mini-Runbook)
