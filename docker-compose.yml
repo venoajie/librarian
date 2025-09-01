@@ -22,6 +22,14 @@ services:
     volumes:
       - /opt/oci:/home/appuser/.oci:ro,z
       - librarian_chroma_data:/data/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Give the service 90 seconds to start up, download the index,
+      # and load the models before the health check starts failing.
+      start_period: 90s
     # Example resource limits for production, based on trading app pattern
     # mem_limit: 4g
     # mem_reservation: 2g
