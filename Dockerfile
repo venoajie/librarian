@@ -58,5 +58,9 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
   CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
-# This command now works because PYTHONPATH is /app, and it can find the 'app.main' module.
+# Copy the health check script into the image
+COPY ./healthcheck/check.py /opt/healthcheck/check.py
+RUN chmod +x /opt/healthcheck/check.py
+
+# Set the entrypoint for the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
