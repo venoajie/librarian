@@ -20,7 +20,7 @@ services:
     networks:
       - librarian-net
     volumes:
-      - ~/.oci:/home/appuser/.oci:ro,z
+      - ~/.oci:/home/appuser/.oci:ro,Z
       - librarian_chroma_data:/data/chroma
     # Example resource limits for production, based on trading app pattern
     # mem_limit: 4g
