@@ -67,8 +67,11 @@ async def lifespan(app: FastAPI):
     if downloaded and index_manager.unpack_index(archive_path, index_path):
         try:
             chroma_client = chromadb.PersistentClient(path=str(index_path))
-            app.state.chroma_collection = chroma_client.get_or_create_collection(name=settings.CHROMA_COLLECTION_NAME)
-            
+            app.state.chroma_collection = 
+            chroma_client.get_or_create_collection(
+                name=settings.CHROMA_COLLECTION_NAME,
+                metadata={"hnsw:space": "cosine"}  # This ensures consistency
+            )
             app.state.index_status = IndexStatus.LOADED
             app.state.index_last_modified = datetime.utcnow()
             logger.info(f"ChromaDB index '{settings.CHROMA_COLLECTION_NAME}' loaded successfully.")
