@@ -60,10 +60,10 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 EXPOSE 8000
 
-# The HEALTHCHECK command now uses the explicit IP 127.0.0.1 for maximum reliability
-# inside the container's minimal networking environment.
+# FINAL FIX: Use the more robust "exec" form for the HEALTHCHECK.
+# This removes the shell dependency and is the most reliable method.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-  CMD curl -f http://127.0.0.1:8000/api/v1/health || exit 1
+  CMD ["curl", "-f", "http://127.0.0.1:8000/api/v1/health"]
 
 # Set the entrypoint for the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
