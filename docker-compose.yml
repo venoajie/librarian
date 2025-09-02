@@ -1,69 +1,58 @@
 # docker-compose.yml
-services:
-  librarian:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: librarian-service-1
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    env_file: .env
+    services:
+      librarian:
+        build:
+          context: .
+          dockerfile: Dockerfile
+        container_name: librarian-service
+        restart: unless-stopped
+        ports:
+          - "8000:8000"
+        env_file: .env
+        secrets:
+          - librarian_api_key
+        environment:
+          - LIBRARIAN_API_KEY_FILE=/run/secrets/librarian_api_key
+          - REDIS_URL=redis://redis:6379/0
+          - OCI_CONFIG_PATH=/home/appuser/.oci/config
+        depends_on:
+          redis:
+            condition: service_healthy
+        networks:
+          - librarian-net
+        volumes:
+          - /opt/oci:/home/appuser/.oci:ro,z
+          - librarian_chroma_data:/data/chroma
+        healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+          interval: 30s
+          timeout: 10s
+          retries: 5
+          start_period: 60s
+
+      redis:
+        image: redis:7.2-alpine
+        container_name: librarian-redis
+        restart: unless-stopped
+        command: redis-server --save 60 1 --loglevel warning
+        volumes:
+          - librarian_redis_data:/data
+        networks:
+          - librarian-net
+        healthcheck:
+          test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
+    networks:
+      librarian-net:
+        driver: bridge
+
+    volumes:
+      librarian_chroma_data: {}
+      librarian_redis_data: {}
+
     secrets:
-      - librarian_api_key
-    environment:
-      # Pass the path to the secret file, not the secret itself
-      - LIBRARIAN_API_KEY_FILE=/run/secrets/librarian_api_key
-      - REDIS_URL=redis://redis:6379/0
-    depends_on:
-      redis: { condition: service_healthy }
-    networks:
-      - librarian-net
-    volumes:
-      - /opt/oci:/home/appuser/.oci:ro,z
-      - librarian_chroma_data:/data/chroma
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      # Give the service 90 seconds to start up, download the index,
-      # and load the models before the health check starts failing.
-      start_period: 90s
-    # Example resource limits for production, based on trading app pattern
-    # mem_limit: 4g
-    # mem_reservation: 2g
-
-  redis:
-    image: redis:7.2-alpine
-    container_name: librarian-redis-1
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli PING | grep PONG"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - librarian-net
-    volumes:
-      - librarian_redis_data:/data
-
-networks:
-  librarian-net:
-    driver: bridge
-
-volumes:
-  librarian_chroma_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /data/librarian/chroma # This is the critical line
-  librarian_redis_data:
-
-secrets:
-  librarian_api_key:
-    file: ./secrets/librarian_api_key.txt
+      librarian_api_key:
+        file: ./secrets/librarian_api_key.txt

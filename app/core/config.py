@@ -1,7 +1,7 @@
 #app\core\config.py
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, validator, root_validator
+from pydantic import Field, root_validator
 from typing import Optional
 
 class Settings(BaseSettings):
@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     SERVICE_VERSION: str = Field("1.0.0", env="SERVICE_VERSION")
     LOG_LEVEL: str = Field("INFO", env="LOG_LEVEL")
 
+    # Service Performance
+    MAX_WORKERS: int = Field(4, env="MAX_WORKERS")
+      
+    EMBEDDING_MODEL_NAME: str = Field("all-MiniLM-L6-v2", env="EMBEDDING_MODEL_NAME")
+    STARTUP_TIMEOUT_SECONDS: int = Field(300, env="STARTUP_TIMEOUT_SECONDS")
+    
     # API Authentication (supports Docker secrets)
     LIBRARIAN_API_KEY: Optional[str] = Field(None, env="LIBRARIAN_API_KEY")
     LIBRARIAN_API_KEY_FILE: Optional[str] = Field(None, env="LIBRARIAN_API_KEY_FILE")
@@ -25,7 +31,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_TIMEFRAME: str = Field("100/minute", env="RATE_LIMIT_TIMEFRAME")
 
     # OCI Object Storage
-    OCI_CONFIG_PATH: str = Field("/home/appuser/.oci/config", env="OCI_CONFIG_PATH")
+    # OCI_CONFIG_PATH is optional, as it's not needed for Instance Principal auth.
+    OCI_CONFIG_PATH: Optional[str] = Field(None, env="OCI_CONFIG_PATH")
     OCI_BUCKET_NAME: str = Field(..., env="OCI_BUCKET_NAME")
     OCI_INDEX_OBJECT_NAME: str = Field("index.tar.gz", env="OCI_INDEX_OBJECT_NAME")
 

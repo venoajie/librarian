@@ -4,9 +4,12 @@ import uvloop
 uvloop.install() 
 
 import logging
+import asyncio
+import sys 
 import redis.asyncio as redis
 import chromadb
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor 
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from pathlib import Path
@@ -21,24 +24,100 @@ from app.api.v1.router import api_router
 from app.models.schemas import IndexStatus
 from app.core import index_manager
 
-# --- Setup Logging ---
 logging.basicConfig(
     level=settings.LOG_LEVEL.upper(),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
+def _handle_startup_errors(task: asyncio.Task) -> None:
+    """Callback to handle exceptions in the background startup task."""
+    try:
+        task.result()
+    except Exception as e:
+        logger.critical(
+            f"FATAL: Background initialization failed: {e}. Application will shut down.",
+            exc_info=True
+        )
+        sys.exit(1)
 
+async def load_dependencies(app: FastAPI):
+    logger.info("Background task started: Loading dependencies...")
+    loop = asyncio.get_running_loop()
+    thread_pool = app.state.thread_pool
+
+    try:
+        logger.info("Loading sentence-transformer model into memory...")
+        model_name = settings.EMBEDDING_MODEL_NAME
+        app.state.embedding_model = await loop.run_in_executor(
+            thread_pool, lambda: SentenceTransformer(model_name)
+        )
+        logger.info(f"Model '{model_name}' loaded successfully.")
+    except Exception as e:
+        app.state.embedding_model = None
+        app.state.index_status = IndexStatus.NOT_FOUND
+        logger.critical(f"CRITICAL: Failed to load sentence-transformer model: {e}", exc_info=True)
+        raise
+
+    archive_path = Path("/tmp/index.tar.gz")
+    index_path = Path(settings.CHROMA_DB_PATH)
+    
+    try:
+        downloaded = await loop.run_in_executor(
+            thread_pool, index_manager.download_index_from_oci, archive_path
+        )
+
+        if downloaded and await loop.run_in_executor(
+            thread_pool, index_manager.unpack_index, archive_path, index_path
+        ):
+            chroma_client = await loop.run_in_executor(
+                thread_pool, lambda: chromadb.PersistentClient(path=str(index_path))
+            )
+            app.state.chroma_collection = await loop.run_in_executor(
+                thread_pool, lambda: chroma_client.get_or_create_collection(
+                    name=settings.CHROMA_COLLECTION_NAME,
+                    metadata={"hnsw:space": "cosine"}
+                )
+            )
+            app.state.index_status = IndexStatus.LOADED
+            app.state.index_last_modified = datetime.utcnow()
+            logger.info(f"ChromaDB index '{settings.CHROMA_COLLECTION_NAME}' loaded successfully. Service is now fully operational.")
+        else:
+            app.state.chroma_collection = None
+            app.state.index_status = IndexStatus.NOT_FOUND
+            logger.error("Index setup failed due to download or unpacking error.")
+            raise RuntimeError("Failed to download or unpack the index from OCI.")
+    except Exception as e:
+        app.state.chroma_collection = None
+        app.state.index_status = IndexStatus.NOT_FOUND
+        logger.error(f"Failed to load ChromaDB collection: {e}", exc_info=True)
+        raise
+
+async def timed_load_wrapper(app: FastAPI):
+    """Wraps the dependency loader with a timeout."""
+    try:
+        await asyncio.wait_for(
+            load_dependencies(app), 
+            timeout=settings.STARTUP_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        logger.critical(
+            f"FATAL: Dependency loading timed out after {settings.STARTUP_TIMEOUT_SECONDS} seconds. Application will shut down."
+        )
+        raise
+    
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage application startup and shutdown events."""
     logger.info(f"Starting Librarian Service v{settings.SERVICE_VERSION}")
     
-    # --- Initialize State ---
+    app.state.thread_pool = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
+    logger.info(f"Initialized bounded thread pool with {settings.MAX_WORKERS} workers.")
+
     app.state.index_status = IndexStatus.LOADING
     app.state.index_last_modified = None
+    app.state.embedding_model = None
+    app.state.chroma_collection = None
     
-    # --- Initialize Redis Client ---
     try:
         app.state.redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
         await app.state.redis_client.ping()
@@ -47,49 +126,21 @@ async def lifespan(app: FastAPI):
         app.state.redis_client = None
         logger.error(f"Could not connect to Redis: {e}", exc_info=True)
 
-    # --- Load Sentence Transformer Model ---
-    try:
-        logger.info("Loading sentence-transformer model into memory...")
-        model_name = "all-MiniLM-L6-v2" 
-        app.state.embedding_model = SentenceTransformer(model_name)
-        logger.info(f"Model '{model_name}' loaded successfully.")
-    except Exception as e:
-        app.state.embedding_model = None
-        logger.critical(f"CRITICAL: Failed to load sentence-transformer model: {e}", exc_info=True)
-
-    # --- Load ChromaDB Index ---
-    archive_path = Path("/tmp/index.tar.gz")
-    index_path = Path(settings.CHROMA_DB_PATH)
+    # Create the single, correct background task with the timeout wrapper and error handling callback.
+    startup_task = asyncio.create_task(timed_load_wrapper(app))
+    startup_task.add_done_callback(_handle_startup_errors)
     
-    #index_manager._mock_oci_download(archive_path)
-    downloaded =  index_manager.download_index_from_oci(archive_path)
-
-    if downloaded and index_manager.unpack_index(archive_path, index_path):
-        try:
-            chroma_client = chromadb.PersistentClient(path=str(index_path))
-            app.state.chroma_collection = chroma_client.get_or_create_collection(
-                name=settings.CHROMA_COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"}  # This ensures consistency
-            )
-            app.state.index_status = IndexStatus.LOADED
-            app.state.index_last_modified = datetime.utcnow()
-            logger.info(f"ChromaDB index '{settings.CHROMA_COLLECTION_NAME}' loaded successfully.")
-        except Exception as e:
-            app.state.chroma_collection = None
-            app.state.index_status = IndexStatus.NOT_FOUND
-            logger.error(f"Failed to load ChromaDB collection: {e}", exc_info=True)
-    else:
-        app.state.chroma_collection = None
-        app.state.index_status = IndexStatus.NOT_FOUND
-        logger.error("Index setup failed due to download or unpacking error.")
-
+    logger.info("Application startup complete. Now listening for requests.")
+    logger.info("Index and model loading will continue in the background.")
     yield
     
-    # --- Shutdown ---
     logger.info("Shutting down Librarian Service.")
     if app.state.redis_client:
         await app.state.redis_client.close()
         logger.info("Redis connection closed.")
+    
+    app.state.thread_pool.shutdown()
+    logger.info("Thread pool shut down.")
 
 app = FastAPI(
     title="Librarian RAG Service",
@@ -103,7 +154,6 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
 app.include_router(api_router, prefix="/api/v1")
 
 @app.get("/", include_in_schema=False)
