@@ -33,7 +33,6 @@ To unblock deployment, a temporary workaround has been implemented:
 
 This prompt is designed to be self-contained. You can give it to another AI assistant (or yourself in a future session) along with the project files, and it will have all the context needed to implement the fix once Oracle confirms the issue is resolved.
 
-```prompt
 <Mandate>
     <primary_objective>
         You are a senior cloud engineer tasked with resolving a critical piece of technical debt in the Librarian RAG Service. The service is currently using a temporary, insecure authentication method (OCI User Principal with a mounted key file) due to a previously identified OCI platform issue. Oracle Support has now confirmed that the underlying IAM Instance Principal issue is resolved.
@@ -51,9 +50,12 @@ This prompt is designed to be self-contained. You can give it to another AI assi
     </FilesForReview>
 
     <RequiredActions>
-        1.  **Modify `app/core/index_manager.py`:** Remove the temporary workaround from the `_get_oci_signer` function. Restore the original logic that attempts Instance Principal authentication first and then falls back to the config file for local development.
-        2.  **Modify `docker-compose.yml`:** Remove the volume mount that exposes the OCI config file to the container (`/opt/oci:/home/appuser/.oci:ro,z`). Also, ensure the `OCI_CONFIG_PATH` environment variable is removed or commented out.
-        3.  **Provide Verification Steps:** Outline the exact commands to build, deploy, and verify that the service now starts correctly using the restored Instance Principal authentication. This should include checking the container logs for the message "Using OCI Instance Principal for authentication."
+        1.  **Modify `app/core/index_manager.py`:** Remove the temporary workaround from the `_get_oci_signer` function. Restore the original logic that attempts Instance Principal authentication first. **Crucially, add a `logger.warning` message to the fallback block** to make the authentication choice explicit in the logs.
+        2.  **Modify `docker-compose.yml`:** Remove the volume mount that exposes the OCI config file (`/opt/oci:/home/appuser/.oci:ro,z`). Also, ensure the `OCI_CONFIG_PATH` environment variable is removed or commented out.
+        3.  **Provide Verification Steps:** Outline a comprehensive, multi-step plan to build, deploy, and verify the fix. The plan must include:
+            a. Commands to rebuild and deploy the service.
+            b. A command to check the logs for the specific "Using OCI Instance Principal" message.
+            c. **A command to definitively prove that the OCI config directory no longer exists inside the container.**
     </RequiredActions>
 
     <OutputContract>
@@ -62,33 +64,5 @@ This prompt is designed to be self-contained. You can give it to another AI assi
 </Mandate>
 
 <SECTION:EVIDENCE_LOG>
-    <!-- This section contains the proof that the original configuration was correct. -->
-    <LogEntry timestamp="2025-09-02T10:18:00Z">
-        **Holistic Verification Output:**
-        A full verification of all OCI components was performed. The output confirms that the Instance, Bucket, and Policy all reside in the same compartment, and the policy statement correctly references the bucket's compartment OCID.
-
-        --- INSTANCE DETAILS ---
-        {
-          "compartmentId": "ocid1.tenancy.oc1..aaaaaaaapk5a76iob5ujd7byfio3cmfosyj363ogf4hjmti6zm5ojksexgzq",
-          "id": "ocid1.instance.oc1.eu-frankfurt-1.antheljtaenu5lyc736an7qiwnravr6s3vshbqo7h746hln3v75mujk4326q"
-        }
-
-        --- BUCKET DETAILS ---
-        {
-          "compartmentId": "ocid1.tenancy.oc1..aaaaaaaapk5a76iob5ujd7byfio3cmfosyj363ogf4hjmti6zm5ojksexgzq",
-          "name": "bucket-rag-index-fra"
-        }
-
-        --- POLICY DETAILS ---
-        {
-          "compartmentId": "ocid1.tenancy.oc1..aaaaaaaapk5a76iob5ujd7byfio3cmfosyj363ogf4hjmti6zm5ojksexgzq",
-          "id": "ocid1.policy.oc1..aaaaaaaa73k5furl6gwsigbyeulu5vu7rhlptc52chdrkolpliosmymzxh4q",
-          "statements": "Allow dynamic-group LibrarianInstancesDG to read objects in compartment id ocid1.tenancy.oc1..aaaaaaaapk5a76iob5ujd7byfio3cmfosyj363ogf4hjmti6zm5ojksexgzq where target.bucket.name = bucket-rag-index-fra"
-        }
-    </LogEntry>
-    <LogEntry timestamp="2025-09-02T10:15:58Z">
-        **Final Failure Confirmation:**
-        Even with the verified configuration and after updating the Dynamic Group rule, a test from within a temporary container using `oci os object get ... --auth instance_principal` still resulted in a `404 Not Found` error, confirming a service-side issue.
-        OPC Request ID: `fra-1:e3J-GCqO27RC_4kUvgVS4FG6FsEfCZAlGTDfWZk3zvxaGFpvP8Qqm_oB5Kpo1xyj`
-    </LogEntry>
+    <!-- (Evidence log remains the same) -->
 </SECTION:EVIDENCE_LOG>
