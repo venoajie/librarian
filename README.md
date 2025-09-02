@@ -24,7 +24,64 @@ A standalone, containerized FastAPI service that acts as a centralized, secure, 
 ### 1. Prerequisites
 - Docker & Docker Compose
 - An OCI account with an Object Storage bucket.
-- OCI credentials configured on the host machine.
+- **For Local Development:** OCI credentials (`~/.oci/config`) configured on the host machine.
+
+### 2. Deployment Models
+
+This service supports two deployment models to align with best practices.
+
+#### A) Local Development Setup (using OCI Key Files)
+
+This method is ideal for local testing and development. It mounts your local OCI key file into the container.
+
+**Host Preparation (First-Time Setup):**
+Before the first deployment, prepare the host environment to securely provide OCI credentials to the container.
+
+```bash
+# 1. Create a system-level directory for OCI credentials to avoid SELinux issues.
+sudo mkdir -p /opt/oci
+
+# 2. Copy your OCI config and key file to the new location.
+sudo cp ~/.oci/config ~/.oci/your_api_key.pem /opt/oci/
+
+# 3. IMPORTANT: Edit the config file to use a portable path for the key_file.
+#    Change 'key_file=/home/your_user/.oci/your_api_key.pem' to 'key_file=~/.oci/your_api_key.pem'
+sudo nano /opt/oci/config
+
+# 4. Set secure but readable permissions.
+sudo chmod 644 /opt/oci/config /opt/oci/your_api_key.pem
+```
+
+**Running with Docker Compose:**
+The provided `docker-compose.yml` is pre-configured for this method.
+
+```bash
+# 1. Create the secrets file (only needed once).
+mkdir -p secrets
+echo -n "your-super-secret-key-here" > ./secrets/librarian_api_key.txt
+
+# 2. Create and configure your .env file.
+cp .env.example .env
+nano .env # Set OCI_BUCKET_NAME and OCI_CONFIG_PATH=/home/appuser/.oci/config
+
+# 3. Build and start the services.
+docker compose up --build -d
+```
+
+#### B) Production Deployment (Recommended: using OCI Instance Principals)
+
+This is the **architecturally mandated** and most secure method for production. It requires running the container on an OCI Compute Instance that has been granted the correct IAM policies to access the Object Storage bucket. This method **eliminates the need for key files** on the server.
+
+**Deployment Steps:**
+
+1.  Ensure the OCI Compute Instance has the necessary IAM policies (e.g., `allow dynamic-group MyLibrarianInstances to read objects in compartment MyCompartment where target.bucket.name = 'my-librarian-bucket'`).
+2.  In your production `.env` file or environment configuration, **DO NOT** set the `OCI_CONFIG_PATH` variable. The application will automatically detect the instance principal environment.
+3.  In your production `docker-compose.yml` or container orchestration definition, **REMOVE** the volume mount for OCI credentials:
+    ```yaml
+    # In your production compose file, this volume mount should be DELETED:
+    # - /opt/oci:/home/appuser/.oci:ro,z 
+    ```
+4.  Deploy the container as usual. The service will authenticate automatically and securely.
 
 ### 2. Host Preparation (First-Time Setup for OCI Credentials)
 Before the first deployment, prepare the host environment to securely provide OCI credentials to the container.
