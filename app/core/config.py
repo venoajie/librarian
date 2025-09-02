@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     # Service Performance
     MAX_WORKERS: int = Field(4, env="MAX_WORKERS")
       
-    EMBEDDING_MODEL_NAME: str = Field("all-MiniLM-L6-v2", env="EMBEDDING_MODEL_NAME")
+    EMBEDDING_MODEL_NAME: str = Field("BAAI/bge-large-en-v1.5", env="EMBEDDING_MODEL_NAME")
     STARTUP_TIMEOUT_SECONDS: int = Field(300, env="STARTUP_TIMEOUT_SECONDS")
     
     # API Authentication (supports Docker secrets)
