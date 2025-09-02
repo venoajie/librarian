@@ -14,14 +14,14 @@
         environment:
           - LIBRARIAN_API_KEY_FILE=/run/secrets/librarian_api_key
           - REDIS_URL=redis://redis:6379/0
-          - OCI_CONFIG_PATH=/home/appuser/.oci/config
+          #- OCI_CONFIG_PATH=/home/appuser/.oci/config
         depends_on:
           redis:
             condition: service_healthy
         networks:
           - librarian-net
         volumes:
-          - /opt/oci:/home/appuser/.oci:ro,z
+          #- /opt/oci:/home/appuser/.oci:ro,z
           - librarian_chroma_data:/data/chroma
         healthcheck:
           test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
