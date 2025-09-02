@@ -4,6 +4,7 @@ import uvloop
 uvloop.install() 
 
 import logging
+import asyncio
 import redis.asyncio as redis
 import chromadb
 from contextlib import asynccontextmanager
@@ -29,14 +30,72 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def load_dependencies(app: FastAPI):
+    """
+    Asynchronously loads heavy resources (model, index) after startup.
+    This runs in a background task and updates the app state upon completion.
+    """
+    logger.info("Background task started: Loading dependencies...")
+    loop = asyncio.get_running_loop()
+
+    # --- Load Sentence Transformer Model ---
+    try:
+        logger.info("Loading sentence-transformer model into memory...")
+        model_name = "all-MiniLM-L6-v2"
+        # Use run_in_executor for the blocking SentenceTransformer constructor
+        app.state.embedding_model = await loop.run_in_executor(
+            None, lambda: SentenceTransformer(model_name)
+        )
+        logger.info(f"Model '{model_name}' loaded successfully.")
+    except Exception as e:
+        app.state.embedding_model = None
+        app.state.index_status = IndexStatus.NOT_FOUND
+        logger.critical(f"CRITICAL: Failed to load sentence-transformer model: {e}", exc_info=True)
+        return # Stop loading if the model fails
+
+    # --- Load ChromaDB Index ---
+    archive_path = Path("/tmp/index.tar.gz")
+    index_path = Path(settings.CHROMA_DB_PATH)
+    
+    downloaded = await loop.run_in_executor(
+        None, index_manager.download_index_from_oci, archive_path
+    )
+
+    if downloaded and await loop.run_in_executor(None, index_manager.unpack_index, archive_path, index_path):
+        try:
+            # Use run_in_executor for the blocking ChromaDB client calls
+            chroma_client = await loop.run_in_executor(
+                None, lambda: chromadb.PersistentClient(path=str(index_path))
+            )
+            app.state.chroma_collection = await loop.run_in_executor(
+                None, lambda: chroma_client.get_or_create_collection(
+                    name=settings.CHROMA_COLLECTION_NAME,
+                    metadata={"hnsw:space": "cosine"}
+                )
+            )
+            app.state.index_status = IndexStatus.LOADED
+            app.state.index_last_modified = datetime.utcnow()
+            logger.info(f"ChromaDB index '{settings.CHROMA_COLLECTION_NAME}' loaded successfully. Service is now fully operational.")
+        except Exception as e:
+            app.state.chroma_collection = None
+            app.state.index_status = IndexStatus.NOT_FOUND
+            logger.error(f"Failed to load ChromaDB collection: {e}", exc_info=True)
+    else:
+        app.state.chroma_collection = None
+        app.state.index_status = IndexStatus.NOT_FOUND
+        logger.error("Index setup failed due to download or unpacking error.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application startup and shutdown events."""
     logger.info(f"Starting Librarian Service v{settings.SERVICE_VERSION}")
     
-    # --- Initialize State ---
+    # --- Initialize State Immediately ---
     app.state.index_status = IndexStatus.LOADING
     app.state.index_last_modified = None
+    app.state.embedding_model = None
+    app.state.chroma_collection = None
     
     # --- Initialize Redis Client ---
     try:
@@ -47,42 +106,12 @@ async def lifespan(app: FastAPI):
         app.state.redis_client = None
         logger.error(f"Could not connect to Redis: {e}", exc_info=True)
 
-    # --- Load Sentence Transformer Model ---
-    try:
-        logger.info("Loading sentence-transformer model into memory...")
-        model_name = "all-MiniLM-L6-v2" 
-        app.state.embedding_model = SentenceTransformer(model_name)
-        logger.info(f"Model '{model_name}' loaded successfully.")
-    except Exception as e:
-        app.state.embedding_model = None
-        logger.critical(f"CRITICAL: Failed to load sentence-transformer model: {e}", exc_info=True)
+    # --- Start background loading of heavy dependencies ---
+    asyncio.create_task(load_dependencies(app))
 
-    # --- Load ChromaDB Index ---
-    archive_path = Path("/tmp/index.tar.gz")
-    index_path = Path(settings.CHROMA_DB_PATH)
-    
-    #index_manager._mock_oci_download(archive_path)
-    downloaded =  index_manager.download_index_from_oci(archive_path)
-
-    if downloaded and index_manager.unpack_index(archive_path, index_path):
-        try:
-            chroma_client = chromadb.PersistentClient(path=str(index_path))
-            app.state.chroma_collection = chroma_client.get_or_create_collection(
-                name=settings.CHROMA_COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"}  # This ensures consistency
-            )
-            app.state.index_status = IndexStatus.LOADED
-            app.state.index_last_modified = datetime.utcnow()
-            logger.info(f"ChromaDB index '{settings.CHROMA_COLLECTION_NAME}' loaded successfully.")
-        except Exception as e:
-            app.state.chroma_collection = None
-            app.state.index_status = IndexStatus.NOT_FOUND
-            logger.error(f"Failed to load ChromaDB collection: {e}", exc_info=True)
-    else:
-        app.state.chroma_collection = None
-        app.state.index_status = IndexStatus.NOT_FOUND
-        logger.error("Index setup failed due to download or unpacking error.")
-
+    # --- Yield control immediately, allowing the server to start accepting requests ---
+    logger.info("Application startup complete. Now listening for requests.")
+    logger.info("Index and model loading will continue in the background.")
     yield
     
     # --- Shutdown ---

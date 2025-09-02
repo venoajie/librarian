@@ -1,11 +1,10 @@
 # docker-compose.yml
-
 services:
   librarian:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: librarian-service-1
+    container_name: librarian-service
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -15,53 +14,50 @@ services:
     environment:
       - LIBRARIAN_API_KEY_FILE=/run/secrets/librarian_api_key
       - REDIS_URL=redis://redis:6379/0
+      # Mount OCI credentials from a secure, system-wide path
+      - OCI_CONFIG_PATH=/home/appuser/.oci/config
     depends_on:
-      redis: { condition: service_healthy }
+      redis:
+        condition: service_healthy
     networks:
       - librarian-net
     volumes:
+      # Mount OCI credentials read-only from the host.
+      # IMPORTANT: See README for required host preparation steps.
       - /opt/oci:/home/appuser/.oci:ro,z
+      # Use a named volume for ChromaDB data for portability and reliability.
       - librarian_chroma_data:/data/chroma
     healthcheck:
+      # This healthcheck now correctly queries the application's API
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 300s
-    # This is not an example, this is now a requirement.
-    mem_limit: 8g
-    mem_reservation: 4g
-    cpus: '2.0'
+      retries: 5
+      start_period: 60s
 
   redis:
     image: redis:7.2-alpine
-    container_name: librarian-redis-1
+    container_name: librarian-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "python", "/opt/healthcheck/check.py"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 300s
-    networks:
-      - librarian-net
+    command: redis-server --save 60 1 --loglevel warning
     volumes:
       - librarian_redis_data:/data
+    networks:
+      - librarian-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 networks:
   librarian-net:
     driver: bridge
 
 volumes:
-  librarian_chroma_data:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /data/librarian/chroma # This is the critical line
-  librarian_redis_data:
+  # Let Docker manage the volumes. This is the standard, recommended approach.
+  librarian_chroma_data: {}
+  librarian_redis_data: {}
 
 secrets:
   librarian_api_key:
