@@ -18,13 +18,20 @@ WORKDIR /build
 COPY pyproject.toml .
 RUN uv pip install --no-cache --strict .
 
+# --- Model Downloader ---
+# This stage pre-downloads the model files into a clean layer.
+FROM builder AS model_downloader
+ARG HF_HOME=/opt/huggingface_cache
+ENV HUGGINGFACE_HUB_CACHE=${HF_HOME}
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-large-en-v1.5', cache_folder='${HF_HOME}')"
+
+
 # Stage 3: Runtime - Final, lean image
 FROM base AS runtime
 
 # --- ALL ROOT-LEVEL SETUP HAPPENS FIRST ---
 
 # 1. Install curl and its dependencies. Clean up apt cache.
-#    This is the critical fix to ensure the HEALTHCHECK command can run.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
@@ -40,11 +47,16 @@ RUN mkdir -p /app && \
 # 4. Copy the virtual environment from the builder stage.
 COPY --from=builder ${UV_VENV} ${UV_VENV}
 
+# --- Copy the pre-downloaded model cache ---
+ARG HF_HOME=/opt/huggingface_cache
+ENV HUGGINGFACE_HUB_CACHE=${HF_HOME}
+COPY --from=model_downloader ${HF_HOME} ${HF_HOME}
+
 # 5. Copy the application code.
 COPY ./app /app/app
 
 # 6. Set ownership for ALL application-related files and directories at once.
-RUN chown -R appuser:appuser /app /data /opt/venv
+RUN chown -R appuser:appuser /app /data /opt/venv ${HF_HOME}
 
 # --- END OF ROOT-LEVEL SETUP ---
 
