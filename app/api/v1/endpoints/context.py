@@ -4,6 +4,7 @@ import asyncio
 import time
 import logging
 import orjson
+import hashlib 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 
 from app.models.schemas import ContextRequest, ContextResponse, ContextChunk
@@ -29,12 +30,15 @@ async def get_context(
     """Retrieves relevant context chunks for a given query from the codebase index."""
     start_time = time.monotonic()
     
-    # Get clients from application state
+    normalized_query = body.query.lower().strip()
+    query_hash = hashlib.md5(normalized_query.encode()).hexdigest()
+    log_query_id = f"query_hash:{query_hash[:8]}" # For concise logging
+    cache_key = f"context_query:{query_hash}:{body.max_results}"
+
     redis_client = request.app.state.redis_client
     chroma_collection = request.app.state.chroma_collection
-
-    # Get the embedding model from application state
     embedding_model = request.app.state.embedding_model
+
     if not embedding_model:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -42,22 +46,19 @@ async def get_context(
         )
 
     # 1. Check Redis Cache
-    cache_key = f"context_query:{body.query}:{body.max_results}"
     try:
         if redis_client:
             cached_result = await redis_client.get(cache_key)
             if cached_result:
-                logger.info(f"Cache hit for query: '{body.query[:50]}...'")
+                logger.info(f"Cache hit for {log_query_id}")
                 cached_data = orjson.loads(cached_result)
                 cached_data['processing_time_ms'] = int((time.monotonic() - start_time) * 1000)
                 return ContextResponse(**cached_data)
     except Exception as e:
-        logger.error(f"Redis cache check failed: {e}", exc_info=True)
-        # Non-blocking error: proceed without cache
+        logger.error(f"Redis cache check failed for {log_query_id}: {e}", exc_info=True)
 
-    logger.info(f"Cache miss for query: '{body.query[:50]}...'")
+    logger.info(f"Cache miss for {log_query_id}")
 
-    # 2. Query ChromaDB
     if not chroma_collection:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -65,21 +66,23 @@ async def get_context(
         )
 
     try:
-        logger.debug("Encoding query text into a vector...")
+        logger.debug(f"Encoding query for {log_query_id}...")
         loop = asyncio.get_running_loop()
+        thread_pool = request.app.state.thread_pool
         query_vector = await loop.run_in_executor(
-            None,  # Use the default thread pool executor
-            lambda: embedding_model.encode(body.query).tolist()
+            thread_pool,  # Use the bounded pool
+            lambda: embedding_model.encode(normalized_query).tolist()
         )
-        logger.debug(f"Querying ChromaDB collection '{settings.CHROMA_COLLECTION_NAME}' with vector...")
-        results = chroma_collection.query(
-            query_embeddings=[query_vector], # USE THE VECTOR, NOT THE TEXT
-            n_results=body.max_results
-        )        
+        logger.debug(f"Querying ChromaDB for {log_query_id}...")        
+        results = await loop.run_in_executor(
+            thread_pool,
+            lambda: chroma_collection.query(
+                query_embeddings=[query_vector],
+                n_results=body.max_results
+                )
+            )
         
-        # 3. Format the response
         context_chunks = []
-        # Results are lists of lists because we can query multiple texts at once. We only query one.
         docs = results.get('documents', [[]])[0]
         metadatas = results.get('metadatas', [[]])[0]
         distances = results.get('distances', [[]])[0]
@@ -89,7 +92,7 @@ async def get_context(
                 ContextChunk(
                     content=doc,
                     metadata=meta,
-                    score=1.0 - dist  # Convert distance to similarity score
+                    score=1.0 - dist
                 )
             )
         
@@ -108,15 +111,14 @@ async def get_context(
                     orjson.dumps(payload_to_cache),
                     ex=settings.REDIS_CACHE_TTL_SECONDS
                 )
-                logger.info(f"Stored new cache entry for query: '{body.query[:50]}...'")
+                logger.info(f"Stored new cache entry for {log_query_id}")
         except Exception as e:
-            logger.error(f"Redis cache store failed: {e}", exc_info=True)
-            # Non-blocking error
+            logger.error(f"Redis cache store failed for {log_query_id}: {e}", exc_info=True)
 
         return response
 
     except Exception as e:
-        logger.error(f"Error querying ChromaDB: {e}", exc_info=True)
+        logger.error(f"Error querying ChromaDB for {log_query_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An internal error occurred while querying the index."
