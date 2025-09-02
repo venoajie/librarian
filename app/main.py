@@ -22,27 +22,19 @@ from app.api.v1.router import api_router
 from app.models.schemas import IndexStatus
 from app.core import index_manager
 
-# --- Setup Logging ---
 logging.basicConfig(
     level=settings.LOG_LEVEL.upper(),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-
 async def load_dependencies(app: FastAPI):
-    """
-    Asynchronously loads heavy resources (model, index) after startup.
-    This runs in a background task and updates the app state upon completion.
-    """
     logger.info("Background task started: Loading dependencies...")
     loop = asyncio.get_running_loop()
 
-    # --- Load Sentence Transformer Model ---
     try:
         logger.info("Loading sentence-transformer model into memory...")
         model_name = "all-MiniLM-L6-v2"
-        # Use run_in_executor for the blocking SentenceTransformer constructor
         app.state.embedding_model = await loop.run_in_executor(
             None, lambda: SentenceTransformer(model_name)
         )
@@ -51,9 +43,8 @@ async def load_dependencies(app: FastAPI):
         app.state.embedding_model = None
         app.state.index_status = IndexStatus.NOT_FOUND
         logger.critical(f"CRITICAL: Failed to load sentence-transformer model: {e}", exc_info=True)
-        return # Stop loading if the model fails
+        return
 
-    # --- Load ChromaDB Index ---
     archive_path = Path("/tmp/index.tar.gz")
     index_path = Path(settings.CHROMA_DB_PATH)
     
@@ -63,7 +54,6 @@ async def load_dependencies(app: FastAPI):
 
     if downloaded and await loop.run_in_executor(None, index_manager.unpack_index, archive_path, index_path):
         try:
-            # Use run_in_executor for the blocking ChromaDB client calls
             chroma_client = await loop.run_in_executor(
                 None, lambda: chromadb.PersistentClient(path=str(index_path))
             )
@@ -85,19 +75,15 @@ async def load_dependencies(app: FastAPI):
         app.state.index_status = IndexStatus.NOT_FOUND
         logger.error("Index setup failed due to download or unpacking error.")
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage application startup and shutdown events."""
     logger.info(f"Starting Librarian Service v{settings.SERVICE_VERSION}")
     
-    # --- Initialize State Immediately ---
     app.state.index_status = IndexStatus.LOADING
     app.state.index_last_modified = None
     app.state.embedding_model = None
     app.state.chroma_collection = None
     
-    # --- Initialize Redis Client ---
     try:
         app.state.redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
         await app.state.redis_client.ping()
@@ -106,15 +92,12 @@ async def lifespan(app: FastAPI):
         app.state.redis_client = None
         logger.error(f"Could not connect to Redis: {e}", exc_info=True)
 
-    # --- Start background loading of heavy dependencies ---
     asyncio.create_task(load_dependencies(app))
 
-    # --- Yield control immediately, allowing the server to start accepting requests ---
     logger.info("Application startup complete. Now listening for requests.")
     logger.info("Index and model loading will continue in the background.")
     yield
     
-    # --- Shutdown ---
     logger.info("Shutting down Librarian Service.")
     if app.state.redis_client:
         await app.state.redis_client.close()

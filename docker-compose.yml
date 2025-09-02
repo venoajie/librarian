@@ -1,64 +1,58 @@
 # docker-compose.yml
-services:
-  librarian:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: librarian-service
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    env_file: .env
-    secrets:
-      - librarian_api_key
-    environment:
-      - LIBRARIAN_API_KEY_FILE=/run/secrets/librarian_api_key
-      - REDIS_URL=redis://redis:6379/0
-      # Mount OCI credentials from a secure, system-wide path
-      - OCI_CONFIG_PATH=/home/appuser/.oci/config
-    depends_on:
+    services:
+      librarian:
+        build:
+          context: .
+          dockerfile: Dockerfile
+        container_name: librarian-service
+        restart: unless-stopped
+        ports:
+          - "8000:8000"
+        env_file: .env
+        secrets:
+          - librarian_api_key
+        environment:
+          - LIBRARIAN_API_KEY_FILE=/run/secrets/librarian_api_key
+          - REDIS_URL=redis://redis:6379/0
+          - OCI_CONFIG_PATH=/home/appuser/.oci/config
+        depends_on:
+          redis:
+            condition: service_healthy
+        networks:
+          - librarian-net
+        volumes:
+          - /opt/oci:/home/appuser/.oci:ro,z
+          - librarian_chroma_data:/data/chroma
+        healthcheck:
+          test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+          interval: 30s
+          timeout: 10s
+          retries: 5
+          start_period: 60s
+
       redis:
-        condition: service_healthy
+        image: redis:7.2-alpine
+        container_name: librarian-redis
+        restart: unless-stopped
+        command: redis-server --save 60 1 --loglevel warning
+        volumes:
+          - librarian_redis_data:/data
+        networks:
+          - librarian-net
+        healthcheck:
+          test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+          interval: 10s
+          timeout: 5s
+          retries: 5
+
     networks:
-      - librarian-net
+      librarian-net:
+        driver: bridge
+
     volumes:
-      # Mount OCI credentials read-only from the host.
-      # IMPORTANT: See README for required host preparation steps.
-      - /opt/oci:/home/appuser/.oci:ro,z
-      # Use a named volume for ChromaDB data for portability and reliability.
-      - librarian_chroma_data:/data/chroma
-    healthcheck:
-      # This healthcheck now correctly queries the application's API
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      librarian_chroma_data: {}
+      librarian_redis_data: {}
 
-  redis:
-    image: redis:7.2-alpine
-    container_name: librarian-redis
-    restart: unless-stopped
-    command: redis-server --save 60 1 --loglevel warning
-    volumes:
-      - librarian_redis_data:/data
-    networks:
-      - librarian-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-networks:
-  librarian-net:
-    driver: bridge
-
-volumes:
-  # Let Docker manage the volumes. This is the standard, recommended approach.
-  librarian_chroma_data: {}
-  librarian_redis_data: {}
-
-secrets:
-  librarian_api_key:
-    file: ./secrets/librarian_api_key.txt
+    secrets:
+      librarian_api_key:
+        file: ./secrets/librarian_api_key.txt
