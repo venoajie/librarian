@@ -3,6 +3,8 @@
 # Stage 1: Base with UV and a Virtual Environment
 FROM python:3.12-slim AS base
 
+
+
 ENV UV_VENV=/opt/venv
 RUN python -m pip install --no-cache-dir uv \
     && python -m uv venv ${UV_VENV}
@@ -60,10 +62,10 @@ ENV PATH="/opt/venv/bin:$PATH" \
 
 EXPOSE 8000
 
-# FINAL FIX: Use the more robust "exec" form for the HEALTHCHECK.
-# This removes the shell dependency and is the most reliable method.
+# DEFINITIVE FIX: Use 'localhost' which is more reliably resolved
+# within the container's internal networking stack for this check.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-  CMD ["curl", "-f", "http://127.0.0.1:8000/api/v1/health"]
+  CMD ["curl", "-f", "http://localhost:8000/api/v1/health"]
 
 # Set the entrypoint for the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
