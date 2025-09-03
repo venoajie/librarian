@@ -186,3 +186,25 @@ docker compose up -d
 - **`403 Forbidden`:** The client is providing a missing or invalid `X-API-KEY` header.
 - **`429 Too Many Requests`:** The client has exceeded the configured rate limit.
 - **`503 Service Unavailable` on `/context`:** This indicates the index is not loaded (`app.state.chroma_collection` is `None`). This is an expected error if a request is made while the service is still in its `loading` state after a fresh start. The client should retry after a short delay.
+
+
+## Integration Contract for Index Producers
+
+Any external system (e.g., a CI/CD pipeline) that generates and uploads an index for consumption by this Librarian service **MUST** adhere to the following contract. This ensures compatibility and prevents silent failures.
+
+### 1. OCI Object Storage Configuration
+
+The index producer **MUST** be configured to upload to the same destination the Librarian is configured to read from. The required configuration is managed by the following environment variables:
+
+| Variable                | Required Value                               | Purpose                                      |
+| ----------------------- | -------------------------------------------- | -------------------------------------------- |
+| `OCI_BUCKET_NAME`       | `bucket-rag-index-fra`                       | The canonical bucket for all service indexes. |
+| `OCI_INDEX_OBJECT_NAME` | `indexes/<branch_name>/latest/index.tar.gz` | The required object path structure.          |
+
+### 2. Embedding Model Configuration
+
+The index producer **MUST** use the exact same embedding model as the Librarian service to ensure vector compatibility.
+
+-   **Required Model:** `BAAI/bge-large-en-v1.5`
+
+Failure to align on these configurations will result in a `404 Not Found` error during startup or, in the case of a model mismatch, a silent failure where the service returns irrelevant context.
