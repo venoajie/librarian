@@ -113,8 +113,8 @@ async def load_dependencies(app: FastAPI):
             )
 
             app.state.index_status = IndexStatus.LOADED
-            app.state.index_last_modified = datetime.utcnow()
-            logger.info(f"ChromaDB index '{collection_name}' loaded successfully. Service is now fully operational.")
+            app.state.index_last_modified = datetime.utcnow()            
+            logger.info(f"ChromaDB index '{collection_name_from_manifest}' loaded successfully. Service is now fully operational.")
         else:
             app.state.chroma_collection = None
             app.state.index_status = IndexStatus.NOT_FOUND
