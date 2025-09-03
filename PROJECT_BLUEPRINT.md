@@ -171,12 +171,12 @@ The `v1.0` service is complete and operational. The following enhancements are p
 
 This section records significant deviations from the core architectural principles, typically made to address unforeseen technical constraints.
 
-### ADL-001: Temporary Fallback to User Principal Authentication (v1.0)
+### ADL-001: Temporary Fallback to User Principal Authentication (v1.0) - RESOLVED
 -   **Date:** 2025-09-02
 -   **Principle Affected:** 7.3 Security (Use of OCI Instance Principal)
--   **Deviation:** The initial v1.0 production deployment uses User Principal authentication (via a mounted key file) instead of the mandated Instance Principal method.
--   **Justification:** A persistent, verifiable service-side issue within OCI IAM prevents the correctly configured Instance Principal from being authorized (tracked via Oracle SR `[Enter SR#]`). This deviation was a pragmatic choice to unblock the initial deployment.
--   **Technical Debt:** This is tracked under `LIBRARIAN-TD-001`. The resolution is to revert to Instance Principal authentication as soon as the underlying platform issue is resolved by Oracle.
+-   **Deviation:** The initial v1.0 deployment plan included a temporary fallback to User Principal authentication due to persistent `404 Not Found` errors, which were incorrectly attributed to a service-side OCI IAM issue.
+-   **Resolution (2025-09-03):** A detailed debugging session revealed the `404` errors were caused by a **configuration drift** between the index producer (CI/CD) and the consumer (Librarian service), specifically mismatched bucket names and object paths. **Instance Principal authentication was confirmed to be working correctly all along.**
+-   **Technical Debt:** This item is now **Closed**. The service has been successfully deployed using the mandated Instance Principal method. The original technical debt item `LIBRARIAN-TD-001` has been resolved and closed.
 
 ## 11. RAG-Centric Development Philosophy
 
