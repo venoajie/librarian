@@ -55,7 +55,11 @@ async def get_context(
                 # The cached data already contains the original query_id.
                 # We just add the new processing time.
                 cached_data['processing_time_ms'] = int((time.monotonic() - start_time) * 1000)
-                return ContextResponse(**cached_data)
+                return ContextResponse(
+                    query_id=str(uuid.uuid4()), # Generate a new, unique ID
+                    context=cached_data['context'],
+                    processing_time_ms=int((time.monotonic() - start_time) * 1000)
+                )
     except Exception as e:
         logger.error(f"Redis cache check failed for {log_query_id}: {e}", exc_info=True)
 
@@ -110,7 +114,7 @@ async def get_context(
         try:
             if redis_client:
                 # The model_dump now includes the new query_id, which is correct.
-                payload_to_cache = response.model_dump(exclude={'processing_time_ms'})
+                payload_to_cache = response.model_dump(exclude={'processing_time_ms', 'query_id'})
                 await redis_client.set(
                     cache_key,
                     orjson.dumps(payload_to_cache),
