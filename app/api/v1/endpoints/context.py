@@ -1,10 +1,10 @@
 # app\api\v1\endpoints\context.py
-
 import asyncio
 import time
 import logging
 import orjson
 import hashlib 
+import uuid 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 
 from app.models.schemas import ContextRequest, ContextResponse, ContextChunk
@@ -52,6 +52,8 @@ async def get_context(
             if cached_result:
                 logger.info(f"Cache hit for {log_query_id}")
                 cached_data = orjson.loads(cached_result)
+                # The cached data already contains the original query_id.
+                # We just add the new processing time.
                 cached_data['processing_time_ms'] = int((time.monotonic() - start_time) * 1000)
                 return ContextResponse(**cached_data)
     except Exception as e:
@@ -97,7 +99,9 @@ async def get_context(
             )
         
         processing_time_ms = int((time.monotonic() - start_time) * 1000)
+        
         response = ContextResponse(
+            query_id=str(uuid.uuid4()),
             context=context_chunks,
             processing_time_ms=processing_time_ms
         )
@@ -105,6 +109,7 @@ async def get_context(
         # 4. Store result in Redis Cache
         try:
             if redis_client:
+                # The model_dump now includes the new query_id, which is correct.
                 payload_to_cache = response.model_dump(exclude={'processing_time_ms'})
                 await redis_client.set(
                     cache_key,
