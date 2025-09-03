@@ -6,7 +6,7 @@ uvloop.install()
 import logging
 import asyncio
 import sys 
-import orjson 
+import orjson
 import redis.asyncio as redis
 import chromadb
 from contextlib import asynccontextmanager
@@ -81,10 +81,12 @@ async def load_dependencies(app: FastAPI):
             index_model_name = manifest.get("embedding_model")
             librarian_model_name = settings.EMBEDDING_MODEL_NAME
 
+            # --- THIS IS THE FIX ---
+            # Format the log message as a simple f-string.
             logger.info(
-                "Verifying index compatibility", 
-                librarian_model=librarian_model_name, 
-                index_model=index_model_name
+                f"Verifying index compatibility: "
+                f"Librarian model='{librarian_model_name}', "
+                f"Index model='{index_model_name}'"
             )
 
             if index_model_name != librarian_model_name:
