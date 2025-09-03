@@ -6,6 +6,7 @@ import orjson
 import hashlib 
 import uuid 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import List, Tuple
 
 from app.models.schemas import ContextRequest, ContextResponse, ContextChunk
 from app.core.dependencies import get_api_key
@@ -38,6 +39,7 @@ async def get_context(
     redis_client = request.app.state.redis_client
     chroma_collection = request.app.state.chroma_collection
     embedding_model = request.app.state.embedding_model
+    reranker_model = getattr(request.app.state, 'reranker_model', None)
 
     if not embedding_model:
         raise HTTPException(
@@ -52,8 +54,6 @@ async def get_context(
             if cached_result:
                 logger.info(f"Cache hit for {log_query_id}")
                 cached_data = orjson.loads(cached_result)
-                # The cached data already contains the original query_id.
-                # We just add the new processing time.
                 cached_data['processing_time_ms'] = int((time.monotonic() - start_time) * 1000)
                 return ContextResponse(
                     query_id=str(uuid.uuid4()), # Generate a new, unique ID
@@ -76,7 +76,7 @@ async def get_context(
         loop = asyncio.get_running_loop()
         thread_pool = request.app.state.thread_pool
         query_vector = await loop.run_in_executor(
-            thread_pool,  # Use the bounded pool
+            thread_pool,
             lambda: embedding_model.encode(normalized_query).tolist()
         )
         logger.debug(f"Querying ChromaDB for {log_query_id}...")        
@@ -84,21 +84,49 @@ async def get_context(
             thread_pool,
             lambda: chroma_collection.query(
                 query_embeddings=[query_vector],
-                n_results=body.max_results
+                n_results=settings.RERANK_CANDIDATE_POOL_SIZE if reranker_model and settings.RERANKING_ENABLED else body.max_results
                 )
             )
         
-        context_chunks = []
         docs = results.get('documents', [[]])[0]
         metadatas = results.get('metadatas', [[]])[0]
         distances = results.get('distances', [[]])[0]
 
-        for doc, meta, dist in zip(docs, metadatas, distances):
+        # 2. Rerank results if enabled and available
+        if reranker_model and settings.RERANKING_ENABLED and docs:
+            logger.info(f"Reranking initial {len(docs)} results for {log_query_id}...")
+            rerank_pairs: List[Tuple[str, str]] = [(body.query, doc) for doc in docs]
+            
+            rerank_scores = await loop.run_in_executor(
+                thread_pool,
+                lambda: reranker_model.predict(rerank_pairs)
+            )
+            
+            # Combine docs with their new scores and original metadata/distances
+            reranked_results = sorted(
+                zip(rerank_scores, docs, metadatas, distances), 
+                key=lambda x: x[0], 
+                reverse=True
+            )
+            
+            # Unzip and slice to the final desired number of results
+            final_results = reranked_results[:body.max_results]
+            if final_results:
+                rerank_scores, docs, metadatas, distances = zip(*final_results)
+            else: # Handle case where reranking yields no results
+                docs, metadatas, distances = [], [], []
+            logger.info(f"Reranking complete. Final result count: {len(docs)}.")
+
+
+        context_chunks = []
+        for i, (doc, meta) in enumerate(zip(docs, metadatas)):
+            # Use rerank score if available, otherwise fall back to similarity score
+            score = float(rerank_scores[i]) if 'rerank_scores' in locals() else (1.0 - distances[i])
             context_chunks.append(
                 ContextChunk(
                     content=doc,
                     metadata=meta,
-                    score=1.0 - dist
+                    score=score
                 )
             )
         
@@ -112,8 +140,7 @@ async def get_context(
 
         # 4. Store result in Redis Cache
         try:
-            if redis_client:
-                # The model_dump now includes the new query_id, which is correct.
+            if redis_client and context_chunks:
                 payload_to_cache = response.model_dump(exclude={'processing_time_ms', 'query_id'})
                 await redis_client.set(
                     cache_key,
