@@ -26,7 +26,9 @@ class HealthResponse(BaseModel):
     redis_status: str = Field("unknown", description="Connection status to Redis cache ('connected' or 'disconnected').")
     index_last_modified: Optional[datetime] = None
     resource_usage: ResourceUsage
-    
+    index_branch: Optional[str] = Field(None, description="The git branch of the loaded index.")
+    chroma_collection: Optional[str] = Field(None, description="The name of the loaded ChromaDB collection.")
+
 class ContextRequest(BaseModel):
     query: str = Field(..., min_length=3, max_length=512, description="The user query.")
     max_results: int = Field(5, gt=0, le=20, description="Max number of results.")
