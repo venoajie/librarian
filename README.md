@@ -70,12 +70,7 @@ docker compose up --build -d
 
 #### B) Production Deployment (Recommended: using OCI Instance Principals)
 
-
-**[WARNING] CURRENTLY BLOCKED (As of 2025-09-02):** The Instance Principal method is currently non-functional due to a service-side OCI IAM issue (Oracle SR `[Enter SR#]`). The current production deployment **MUST** use the "Local Development Setup" method below until this is resolved. This is tracked as technical debt `LIBRARIAN-TD-001`.
-
-This is the **architecturally mandated** and most secure method for production. It requires running the container on an OCI Compute Instance that has been granted the correct IAM policies to access the Object Storage bucket. This method **eliminates the need for key files** on the server.
-
-**Deployment Steps (Once platform issue is resolved):**
+**Deployment Steps:**
 
 1.  Ensure the OCI Compute Instance has the necessary IAM policies (e.g., `allow dynamic-group MyLibrarianInstances to read objects in compartment MyCompartment where target.bucket.name = 'my-librarian-bucket'`).
 2.  In your production `.env` file or environment configuration, **DO NOT** set the `OCI_CONFIG_PATH` variable. The application will automatically detect the instance principal environment.
