@@ -16,9 +16,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+
 COPY pyproject.toml .
 # --- OPTIMIZATION 1: Install CPU-only PyTorch ---
-# This is significantly smaller than the default torch package.
+# By using the PyTorch CPU-only index, we avoid downloading the massive CUDA
+# libraries, dramatically reducing the final image size. This service is
+# designed for CPU-based inference.
 RUN uv pip install torch --extra-index-url https://download.pytorch.org/whl/cpu && \
     uv pip install --no-cache --strict .
 

@@ -19,6 +19,17 @@ A standalone, containerized FastAPI service that acts as a centralized, secure, 
 - **Docker Compose Integration:** A `docker-compose.yml` is provided for streamlined local development and testing, now using reliable named volumes.
 - **Operational Runbook:** This README now serves as a comprehensive guide for deployment, monitoring, and troubleshooting.
 
+## Performance & Deployment Notes
+
+### CPU-Only Inference
+
+The official Docker image for the Librarian service is deliberately built with a **CPU-only version of PyTorch**. This is an architectural decision to optimize for:
+
+*   **Smaller Image Size:** Reduces storage costs and speeds up deployment.
+*   **Lower Operational Cost:** The service can be run on standard, cost-effective CPU instances without the need for expensive GPU hardware.
+
+The service is designed for efficient CPU-based inference for embedding and search operations. When provisioning resources, you do not need to consider GPU availability.
+
 ## Deployment & Operations
 
 ### Environment Variables
