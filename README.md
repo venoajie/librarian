@@ -21,6 +21,13 @@ A standalone, containerized FastAPI service that acts as a centralized, secure, 
 
 ## Deployment & Operations
 
+### Environment Variables
+
+-   `OCI_BUCKET_NAME`: The name of the OCI bucket where indexes are stored.
+-   `OCI_INDEX_BRANCH`: **(Required)** The specific git branch for which this Librarian instance should fetch an index (e.g., `develop`, `main`, `feature/new-login`). This variable is used to construct the final object path.
+-   `OCI_INDEX_OBJECT_NAME`: **(DEPRECATED)** This variable should no longer be set directly. The service will construct the correct path dynamically using the pattern `indexes/{OCI_INDEX_BRANCH}/latest/index.tar.gz`.
+
+
 ### 1. Prerequisites
 - Docker & Docker Compose
 - An OCI account with an Object Storage bucket.
