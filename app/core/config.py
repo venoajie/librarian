@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     OCI_CONFIG_PATH: Optional[str] = Field(None, env="OCI_CONFIG_PATH")
     OCI_BUCKET_NAME: str = Field(..., env="OCI_BUCKET_NAME")
     OCI_INDEX_OBJECT_NAME: str = Field("index.tar.gz", env="OCI_INDEX_OBJECT_NAME")
+    OCI_INDEX_BRANCH: str = Field("develop", env="OCI_INDEX_BRANCH")
 
     # ChromaDB
     CHROMA_DB_PATH: str = Field("/data/chroma", env="CHROMA_DB_PATH")

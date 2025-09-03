@@ -6,6 +6,7 @@ uvloop.install()
 import logging
 import asyncio
 import sys 
+import orjson
 import redis.asyncio as redis
 import chromadb
 from contextlib import asynccontextmanager
@@ -70,18 +71,48 @@ async def load_dependencies(app: FastAPI):
         if downloaded and await loop.run_in_executor(
             thread_pool, index_manager.unpack_index, archive_path, index_path
         ):
+            manifest_path = index_path / "index_manifest.json"
+            if not manifest_path.exists():
+                raise RuntimeError("Index integrity check failed: index_manifest.json not found in the unpacked archive.")
+            
+            manifest_content = manifest_path.read_bytes()
+            manifest = orjson.loads(manifest_content)
+            
+            index_model_name = manifest.get("embedding_model")
+            librarian_model_name = settings.EMBEDDING_MODEL_NAME
+
+            # --- THIS IS THE FIX ---
+            # Format the log message as a simple f-string.
+            logger.info(
+                f"Verifying index compatibility: "
+                f"Librarian model='{librarian_model_name}', "
+                f"Index model='{index_model_name}'"
+            )
+
+            if index_model_name != librarian_model_name:
+                raise RuntimeError(
+                    f"FATAL MODEL MISMATCH: The Librarian is configured to use '{librarian_model_name}', "
+                    f"but the downloaded index was built with '{index_model_name}'. Halting startup."
+                )
+            logger.info("Index compatibility check passed.")
+
             chroma_client = await loop.run_in_executor(
                 thread_pool, lambda: chromadb.PersistentClient(path=str(index_path))
             )
+
+            sanitized_branch = settings.OCI_INDEX_BRANCH.replace('/', '-')
+            collection_name = f"{settings.CHROMA_COLLECTION_NAME}_{sanitized_branch}"
+            logger.info(f"Attempting to load ChromaDB collection: {collection_name}")
+
             app.state.chroma_collection = await loop.run_in_executor(
-                thread_pool, lambda: chroma_client.get_or_create_collection(
-                    name=settings.CHROMA_COLLECTION_NAME,
-                    metadata={"hnsw:space": "cosine"}
+                thread_pool, lambda: chroma_client.get_collection(
+                    name=collection_name,
                 )
             )
+
             app.state.index_status = IndexStatus.LOADED
             app.state.index_last_modified = datetime.utcnow()
-            logger.info(f"ChromaDB index '{settings.CHROMA_COLLECTION_NAME}' loaded successfully. Service is now fully operational.")
+            logger.info(f"ChromaDB index '{collection_name}' loaded successfully. Service is now fully operational.")
         else:
             app.state.chroma_collection = None
             app.state.index_status = IndexStatus.NOT_FOUND
@@ -126,7 +157,6 @@ async def lifespan(app: FastAPI):
         app.state.redis_client = None
         logger.error(f"Could not connect to Redis: {e}", exc_info=True)
 
-    # Create the single, correct background task with the timeout wrapper and error handling callback.
     startup_task = asyncio.create_task(timed_load_wrapper(app))
     startup_task.add_done_callback(_handle_startup_errors)
     

@@ -19,11 +19,14 @@ COPY pyproject.toml .
 RUN uv pip install --no-cache --strict .
 
 # --- Model Downloader ---
-# This stage pre-downloads the model files into a clean layer.
 FROM builder AS model_downloader
+
+# Declare the build argument that will be passed in from docker-compose.yml
+ARG EMBEDDING_MODEL_NAME
 ARG HF_HOME=/opt/huggingface_cache
 ENV HUGGINGFACE_HUB_CACHE=${HF_HOME}
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-large-en-v1.5', cache_folder='${HF_HOME}')"
+# Use the build argument to download the correct model dynamically.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL_NAME}', cache_folder='${HF_HOME}')"
 
 
 # Stage 3: Runtime - Final, lean image
@@ -31,7 +34,7 @@ FROM base AS runtime
 
 # --- ALL ROOT-LEVEL SETUP HAPPENS FIRST ---
 
-# 1. Install curl and its dependencies. Clean up apt cache.
+# 1. Install curl and its dependencies.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl && \
     rm -rf /var/lib/apt/lists/*
