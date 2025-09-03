@@ -4,7 +4,6 @@ from typing import List, Optional, Any
 from pydantic import BaseModel, Field, validator
 from datetime import datetime
 from enum import Enum
-import uuid
 
 class HealthStatus(str, Enum):
     OK = "ok"
@@ -44,6 +43,6 @@ class ContextChunk(BaseModel):
     score: float
 
 class ContextResponse(BaseModel):
-    query_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    query_id: str
     context: List[ContextChunk]
     processing_time_ms: int
