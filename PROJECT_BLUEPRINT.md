@@ -165,3 +165,40 @@ The `v1.0` service is complete and operational. The following enhancements are p
 -   **`v1.2` - Automated Index Refresh:** Implement a secure webhook (`/admin/refresh-index`) to allow the service to download and reload the index from OCI without a full container restart.
 -   **`v1.3` - Formal Test Suite:** Develop a comprehensive `pytest` suite with unit and integration tests to improve maintainability and prevent regressions.
 -   **`v2.0` - High Availability:** Document and test a deployment pattern for running multiple Librarian instances behind a load balancer, using a shared Redis Cluster for caching.
+
+
+## 10. Architectural Decisions and Deviations Log
+
+This section records significant deviations from the core architectural principles, typically made to address unforeseen technical constraints.
+
+### ADL-001: Temporary Fallback to User Principal Authentication (v1.0) - RESOLVED
+-   **Date:** 2025-09-02
+-   **Principle Affected:** 7.3 Security (Use of OCI Instance Principal)
+-   **Deviation:** The initial v1.0 deployment plan included a temporary fallback to User Principal authentication due to persistent `404 Not Found` errors, which were incorrectly attributed to a service-side OCI IAM issue.
+-   **Resolution (2025-09-03):** A detailed debugging session revealed the `404` errors were caused by a **configuration drift** between the index producer (CI/CD) and the consumer (Librarian service), specifically mismatched bucket names and object paths. **Instance Principal authentication was confirmed to be working correctly all along.**
+-   **Technical Debt:** This item is now **Closed**. The service has been successfully deployed using the mandated Instance Principal method. The original technical debt item `LIBRARIAN-TD-001` has been resolved and closed.
+
+## 11. RAG-Centric Development Philosophy
+
+The successful deployment and testing of the Librarian v1.0 has revealed foundational principles that must govern all future development within this ecosystem. Adopting the Librarian service is not merely a technical change; it is a cultural shift towards a RAG-centric development model. All team members, both human and AI, must adhere to the following philosophy.
+
+### 11.1. Documentation is for Discovery
+
+The primary purpose of documentation (comments, docstrings, `README.md` files, design documents) is no longer solely for human consumption. It is now a critical component of the **discoverability layer** for our AI agents. A feature without clear, prose-based documentation is effectively invisible to the RAG system.
+
+**Mandate:** All new code, architectural changes, or significant configurations **MUST** be accompanied by clear, concise documentation that explains the **"why,"** not just the "what."
+-   **Good Comment:** `# Use uvloop for a high-performance asyncio event loop to boost network throughput.`
+-   **Poor Comment:** `# Install uvloop.`
+
+This principle directly addresses the observation that the quality of a RAG response is limited by the quality of the source documents. **To improve the AI, we must first improve our documentation.**
+
+### 11.2. Code and Chunking are Symbiotic
+
+The effectiveness of the RAG system depends on how source code is chunked and vectorized by the indexing pipeline (`create_index.py`). The indexing script is not a static, perfect tool; it is an integral part of the development lifecycle that must be understood by developers.
+
+**Mandate:** Developers should write code with an awareness of how it will be chunked.
+-   **Logical Proximity:** Keep related logic and its explanatory comments physically close together in a file. A function's docstring should be directly above it, not separated by other code blocks.
+-   **Self-Contained Paragraphs:** Write comments and documentation in self-contained paragraphs. A single, long comment block that explains three different concepts is less effective than three smaller, more focused comment blocks, as the latter are more likely to be isolated into clean, conceptually pure chunks.
+-   **Configuration Clarity:** When adding new environment variables in configuration files, add a comment explaining the purpose and effect of that variable.
+
+Conversely, the indexing and chunking strategy itself is not sacred. If a common coding pattern in our repository is producing poor chunks, the `create_index.py` script **SHOULD** be refined to better understand our specific code structure. This creates a feedback loop where our coding style and our indexing tools evolve together to optimize the quality of the generated knowledge base.

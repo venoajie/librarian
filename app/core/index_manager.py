@@ -11,25 +11,25 @@ logger = logging.getLogger(__name__)
 
 def _get_oci_signer():
     """
-    Determines the appropriate OCI authentication method.
-    
-    Tries Instance Principal first for production environments,
-    then falls back to the config file for local development.
+    Determines the appropriate OCI authentication method, prioritizing Instance Principal.
     """
     try:
-        # This will succeed if running on an OCI compute instance with the correct policies.
+        # Preferred method for production environments on OCI
+        logger.info("Attempting OCI Instance Principal authentication...")
         signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
-        logger.info("Using OCI Instance Principal for authentication.")
-        # The config is only needed to get the tenancy OCID for the namespace call.
-        # The signer handles the actual authentication.
-        config = {"tenancy": signer.tenancy_id}
+        # Config is minimal as the signer handles most details
+        config = {"region": signer.region}
+        logger.info("Successfully authenticated using OCI Instance Principal.")
         return config, signer
-    except (oci.exceptions.ConfigFileNotFound, oci.exceptions.MissingConfigValue, Exception):
-        logger.info("Instance Principal not available. Falling back to OCI config file.")
+    except Exception:
+        logger.warning("Instance Principal authentication failed. Falling back to OCI config file.")
+        
+        # Fallback method for local development or as a temporary workaround
         if not settings.OCI_CONFIG_PATH or not Path(settings.OCI_CONFIG_PATH).exists():
-            logger.error(f"OCI_CONFIG_PATH '{settings.OCI_CONFIG_PATH}' is not configured or file does not exist.")
+            logger.error(f"OCI_CONFIG_PATH '{settings.OCI_CONFIG_PATH}' is not configured or file does not exist for fallback authentication.")
             raise oci.exceptions.ConfigFileNotFound("OCI config file not found for fallback authentication.")
         
+        logger.info("Authenticating using OCI config file...")
         config = oci.config.from_file(settings.OCI_CONFIG_PATH)
         signer = oci.signer.Signer(
             tenancy=config["tenancy"],
@@ -38,8 +38,8 @@ def _get_oci_signer():
             private_key_file_location=config.get("key_file"),
             pass_phrase=oci.config.get_config_value_or_default(config, "pass_phrase"),
         )
+        logger.info("Successfully authenticated using OCI config file.")
         return config, signer
-
 
 def download_index_from_oci(destination_path: Path):
     """

@@ -70,9 +70,12 @@ docker compose up --build -d
 
 #### B) Production Deployment (Recommended: using OCI Instance Principals)
 
+
+**[WARNING] CURRENTLY BLOCKED (As of 2025-09-02):** The Instance Principal method is currently non-functional due to a service-side OCI IAM issue (Oracle SR `[Enter SR#]`). The current production deployment **MUST** use the "Local Development Setup" method below until this is resolved. This is tracked as technical debt `LIBRARIAN-TD-001`.
+
 This is the **architecturally mandated** and most secure method for production. It requires running the container on an OCI Compute Instance that has been granted the correct IAM policies to access the Object Storage bucket. This method **eliminates the need for key files** on the server.
 
-**Deployment Steps:**
+**Deployment Steps (Once platform issue is resolved):**
 
 1.  Ensure the OCI Compute Instance has the necessary IAM policies (e.g., `allow dynamic-group MyLibrarianInstances to read objects in compartment MyCompartment where target.bucket.name = 'my-librarian-bucket'`).
 2.  In your production `.env` file or environment configuration, **DO NOT** set the `OCI_CONFIG_PATH` variable. The application will automatically detect the instance principal environment.
@@ -183,3 +186,25 @@ docker compose up -d
 - **`403 Forbidden`:** The client is providing a missing or invalid `X-API-KEY` header.
 - **`429 Too Many Requests`:** The client has exceeded the configured rate limit.
 - **`503 Service Unavailable` on `/context`:** This indicates the index is not loaded (`app.state.chroma_collection` is `None`). This is an expected error if a request is made while the service is still in its `loading` state after a fresh start. The client should retry after a short delay.
+
+
+## Integration Contract for Index Producers
+
+Any external system (e.g., a CI/CD pipeline) that generates and uploads an index for consumption by this Librarian service **MUST** adhere to the following contract. This ensures compatibility and prevents silent failures.
+
+### 1. OCI Object Storage Configuration
+
+The index producer **MUST** be configured to upload to the same destination the Librarian is configured to read from. The required configuration is managed by the following environment variables:
+
+| Variable                | Required Value                               | Purpose                                      |
+| ----------------------- | -------------------------------------------- | -------------------------------------------- |
+| `OCI_BUCKET_NAME`       | `bucket-rag-index-fra`                       | The canonical bucket for all service indexes. |
+| `OCI_INDEX_OBJECT_NAME` | `indexes/<branch_name>/latest/index.tar.gz` | The required object path structure.          |
+
+### 2. Embedding Model Configuration
+
+The index producer **MUST** use the exact same embedding model as the Librarian service to ensure vector compatibility.
+
+-   **Required Model:** `BAAI/bge-large-en-v1.5`
+
+Failure to align on these configurations will result in a `404 Not Found` error during startup or, in the case of a model mismatch, a silent failure where the service returns irrelevant context.
