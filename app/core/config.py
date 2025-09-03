@@ -34,8 +34,8 @@ class Settings(BaseSettings):
     # OCI_CONFIG_PATH is optional, as it's not needed for Instance Principal auth.
     OCI_CONFIG_PATH: Optional[str] = Field(None, env="OCI_CONFIG_PATH")
     OCI_BUCKET_NAME: str = Field(..., env="OCI_BUCKET_NAME")
-    OCI_INDEX_OBJECT_NAME: str = Field("index.tar.gz", env="OCI_INDEX_OBJECT_NAME")
-    OCI_INDEX_BRANCH: str = Field("develop", env="OCI_INDEX_BRANCH")
+    OCI_INDEX_OBJECT_NAME: Optional[str] = None
+    OCI_INDEX_BRANCH: str = Field(..., env="OCI_INDEX_BRANCH")
 
     # ChromaDB
     CHROMA_DB_PATH: str = Field("/data/chroma", env="CHROMA_DB_PATH")
@@ -46,11 +46,12 @@ class Settings(BaseSettings):
     REDIS_CACHE_TTL_SECONDS: int = Field(3600, env="REDIS_CACHE_TTL_SECONDS")
 
     @root_validator(pre=False, skip_on_failure=True)
-    def load_api_key_from_file(cls, values):
-        """Load API key from file if specified, providing a secure way to handle secrets."""
+    def process_derived_settings(cls, values):
+        """
+        Load secrets from files and derive dynamic configuration values after initial load.
+        """
+        # Load API key from file if specified
         api_key_file = values.get("LIBRARIAN_API_KEY_FILE")
-        api_key = values.get("LIBRARIAN_API_KEY")
-
         if api_key_file:
             try:
                 with open(api_key_file, 'r') as f:
@@ -60,6 +61,14 @@ class Settings(BaseSettings):
         
         if not values.get("LIBRARIAN_API_KEY"):
             raise ValueError("LIBRARIAN_API_KEY must be set, either via environment variable or LIBRARIAN_API_KEY_FILE.")
+            
+        # Derive the full OCI object name from the branch
+        branch = values.get("OCI_INDEX_BRANCH")
+        if branch:
+            values["OCI_INDEX_OBJECT_NAME"] = f"indexes/{branch}/latest/index.tar.gz"
+        else:
+            # This will be caught by Pydantic's required field validation, but it's good practice.
+            raise ValueError("OCI_INDEX_BRANCH must be set to derive the object name.")
             
         return values
 
