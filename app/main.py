@@ -78,6 +78,8 @@ async def load_dependencies(app: FastAPI):
             manifest_content = manifest_path.read_bytes()
             manifest = orjson.loads(manifest_content)
             
+            app.state.index_manifest = manifest
+            
             index_model_name = manifest.get("embedding_model")
             librarian_model_name = settings.EMBEDDING_MODEL_NAME
 
@@ -94,17 +96,19 @@ async def load_dependencies(app: FastAPI):
                 )
             logger.info("Index compatibility check passed.")
 
+            collection_name_from_manifest = manifest.get("chroma_collection_name")
+            if not collection_name_from_manifest:
+                raise RuntimeError("Index integrity check failed: 'chroma_collection_name' not found in manifest.")
+
             chroma_client = await loop.run_in_executor(
                 thread_pool, lambda: chromadb.PersistentClient(path=str(index_path))
             )
 
-            sanitized_branch = settings.OCI_INDEX_BRANCH.replace('/', '-')
-            collection_name = f"{settings.CHROMA_COLLECTION_NAME}_{sanitized_branch}"
-            logger.info(f"Attempting to load ChromaDB collection: {collection_name}")
+            logger.info(f"Attempting to load ChromaDB collection from manifest: {collection_name_from_manifest}")
 
             app.state.chroma_collection = await loop.run_in_executor(
                 thread_pool, lambda: chroma_client.get_collection(
-                    name=collection_name,
+                    name=collection_name_from_manifest,
                 )
             )
 
@@ -146,6 +150,7 @@ async def lifespan(app: FastAPI):
     app.state.index_last_modified = None
     app.state.embedding_model = None
     app.state.chroma_collection = None
+    app.state.index_manifest = None
     
     try:
         app.state.redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
