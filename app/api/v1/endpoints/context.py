@@ -32,16 +32,33 @@ async def get_context(
     """
     Retrieves relevant context chunks for a given query.
     
-    If reranking is enabled, this endpoint performs a two-stage process:
-    1.  **Retrieval:** Fetches a larger-than-requested set of candidate documents from the vector store.
+    This endpoint supports metadata filtering via the `filters` field.
+    
+    If reranking is enabled, it performs a two-stage process:
+    1.  **Retrieval:** Fetches a larger-than-requested set of candidate documents from the vector store, applying any specified filters.
     2.  **Reranking:** Uses a more powerful Cross-Encoder model to re-score the candidates for relevance to the query.
+    
+    **Metadata Filtering Examples:**
+    - `{"filters": {"language": "python"}}` - Only Python files
+    - `{"filters": {"is_test_file": false}}` - Exclude test files
+    - `{"filters": {"entity_type": "function"}}` - Only function chunks
+    - `{"filters": {"$and": [{"language": "python"}, {"is_test_file": false}]}}` - Combine filters using ChromaDB's syntax
     """
     start_time = time.monotonic()
     
+    # Create a canonical cache key that includes the query, max_results, and a sorted representation of the filters.
     normalized_query = body.query.lower().strip()
-    query_hash = hashlib.md5(normalized_query.encode()).hexdigest()
-    log_query_id = f"query_hash:{query_hash[:8]}" # For concise logging
-    cache_key = f"context_query:{query_hash}:{body.max_results}"
+    cache_key_parts = [normalized_query, str(body.max_results)]
+    if body.filters:
+        # Sort the keys to ensure {'a': 1, 'b': 2} and {'b': 2, 'a': 1} produce the same key.
+        sorted_filters = orjson.dumps(body.filters, option=orjson.OPT_SORT_KEYS).decode()
+        cache_key_parts.append(sorted_filters)
+    
+    # Join all parts and hash for a clean, unique key.
+    cache_key_string = ":".join(cache_key_parts)
+    query_hash = hashlib.md5(cache_key_string.encode()).hexdigest()
+    log_query_id = f"query_hash:{query_hash[:8]}"
+    cache_key = f"context_query:{query_hash}"
 
     redis_client = request.app.state.redis_client
     chroma_collection = request.app.state.chroma_collection
@@ -69,7 +86,7 @@ async def get_context(
     except Exception as e:
         logger.error(f"Redis cache check failed for {log_query_id}: {e}", exc_info=True)
 
-    logger.info(f"Cache miss for {log_query_id}")
+    logger.info(f"Cache miss for {log_query_id} with filters: {body.filters}")
 
     if not chroma_collection:
         raise HTTPException(
@@ -86,19 +103,19 @@ async def get_context(
             lambda: embedding_model.encode(normalized_query).tolist()
         )
         
-        # Determine how many results to fetch for the initial retrieval stage
         n_results_retrieval = (
             settings.RERANK_CANDIDATE_POOL_SIZE 
             if reranker_model and settings.RERANKING_ENABLED 
             else body.max_results
         )
         
-        logger.debug(f"Querying ChromaDB for {log_query_id} with n_results={n_results_retrieval}...")        
+        logger.debug(f"Querying ChromaDB for {log_query_id} with n_results={n_results_retrieval} and filters={body.filters}...")        
         results = await loop.run_in_executor(
             thread_pool,
             lambda: chroma_collection.query(
                 query_embeddings=[query_vector],
-                n_results=n_results_retrieval
+                n_results=n_results_retrieval,
+                where=body.filters
             )
         )
         
@@ -106,7 +123,7 @@ async def get_context(
         metadatas = results.get('metadatas', [[]])[0]
         distances = results.get('distances', [[]])[0]
 
-        # 2. Rerank results if enabled, available, and we have documents to process
+        # 2. Rerank results if enabled and applicable
         if reranker_model and settings.RERANKING_ENABLED and docs:
             logger.info(f"Reranking initial {len(docs)} results for {log_query_id}...")
             rerank_pairs: List[Tuple[str, str]] = [(body.query, doc) for doc in docs]
@@ -116,36 +133,23 @@ async def get_context(
                 lambda: reranker_model.predict(rerank_pairs)
             )
             
-            # Combine docs with their new scores and original metadata/distances
-            reranked_results = sorted(
-                zip(rerank_scores, docs, metadatas, distances), 
-                key=lambda x: x[0], 
-                reverse=True
-            )
+            reranked_results = sorted(zip(rerank_scores, docs, metadatas, distances), key=lambda x: x[0], reverse=True)
             
-            # Unzip and slice to the final desired number of results
             final_results = reranked_results[:body.max_results]
             if final_results:
-                # Note: distances are now irrelevant, scores are from the reranker
                 final_scores, final_docs, final_metadatas, _ = zip(*final_results)
-            else: # Handle case where reranking yields no results
+            else:
                 final_scores, final_docs, final_metadatas = [], [], []
             
             logger.info(f"Reranking complete. Final result count: {len(final_docs)}.")
         else:
-            # If not reranking, use the original results directly
             final_docs, final_metadatas, final_scores = docs, metadatas, [(1.0 - d) for d in distances]
 
         # 3. Format the final response
-        context_chunks = []
-        for doc, meta, score in zip(final_docs, final_metadatas, final_scores):
-            context_chunks.append(
-                ContextChunk(
-                    content=doc,
-                    metadata=meta,
-                    score=float(score)
-                )
-            )
+        context_chunks = [
+            ContextChunk(content=doc, metadata=meta, score=float(score))
+            for doc, meta, score in zip(final_docs, final_metadatas, final_scores)
+        ]
         
         processing_time_ms = int((time.monotonic() - start_time) * 1000)
         
