@@ -1,0 +1,35 @@
+# .ai_config.yml
+# This configuration is specific to the "My Trading App" project.
+
+general:
+  # This is the most powerful feature for project-specific work.
+  # These files will be automatically attached to EVERY prompt you run
+  # from within this project directory.
+  auto_inject_files:
+    - "PROJECT_BLUEPRINT_V2.5.md"
+    - "AMBIGUITY_REPORT.md"    
+    - "AGENTS.md"
+
+    
+rag:
+  # This is the most important setting. It enables the cloud workflow.
+  embedding_model_name: 'BAAI/bge-large-en-v1.5' # <-- Merged from the CI step
+  enable_branch_awareness: true
+  enable_reranking: true
+  
+  # Configure the connection to your shared OCI bucket
+  oracle_cloud:
+    # The OCI namespace where your bucket resides
+    namespace: "frpowqeyehes"
+    # The name of the bucket storing the index archives
+    bucket: "my-trading-app-rag-indexes-dev-fra"
+    # The OCI region for the bucket
+    region: "eu-frankfurt-1"
+
+    
+tools:
+  shell:
+    # This list defines which shell commands the AI is allowed to plan.
+    # For an indexing job, this can be empty. For interactive use, you might
+    # add commands like 'ls', 'cat', 'grep', etc.
+    allowed_commands: []
