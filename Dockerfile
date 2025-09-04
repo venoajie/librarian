@@ -33,7 +33,7 @@ RUN uv pip install sentence-transformers==3.0.1
 # Download the embedding model
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL_NAME}', cache_folder='${HF_HOME}')"
 # NEW: Download the reranker model
-RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL_NAME}', cache_folder='${HF_HOME}')"
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL_NAME}')"
 
 # Stage 3: Runtime - Final, lean image
 FROM base AS runtime
