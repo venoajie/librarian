@@ -9,6 +9,16 @@ This document is the canonical source of truth for the architectural principles 
 
 The Librarian is a standalone, containerized FastAPI service designed to act as a centralized, secure, and maintainable source of contextual information for all development tools and agents within the ecosystem. Its primary purpose is to **decouple the resource-intensive RAG (Retrieval-Augmented Generation) pipeline** from client applications, providing a single, authoritative source for codebase-aware context.
 
+### 1.1. Ecosystem Glossary
+
+This glossary defines the core components and concepts of the Three-Tiered Development Ecosystem.
+
+-   **Three-Tiered Ecosystem:** The overarching architecture composed of three decoupled components: The Product, The Conductor, and The Librarian.
+-   **The Product:** The target application being developed. It is the passive subject of analysis and modification.
+-   **The Conductor (AI Assistant):** The lightweight, user-facing CLI tool. It orchestrates development workflows, manages personas, and interacts with LLMs. It is a **thin client** that offloads all RAG operations to the Librarian.
+-   **The Librarian (RAG Service):** The centralized, standalone, production-grade service responsible for the entire RAG pipeline. It ingests indexes, loads ML models, and serves codebase-aware context via a secure API.
+-   **Index Manifest (`index_manifest.json`):** The immutable integration contract created by the indexer. It is a self-describing file within the index archive that specifies the exact embedding model and collection name used, ensuring perfect compatibility between the index artifact and the Librarian service.
+-   **Kernel:** The core logic engine within the Conductor responsible for intercepting high-level workflow steps (e.g., `execute_refactoring_workflow`) and expanding them into a deterministic sequence of granular tool calls.
 ---
 
 ## 2. Core Architectural Principles
@@ -55,7 +65,7 @@ The Librarian is a composite service that orchestrates several best-in-class com
 
 -   **FastAPI Application (`app/`):** The core web service that exposes the API, handles authentication, and orchestrates all internal logic.
 -   **OCI Object Storage:** The canonical, centralized repository for the compressed vector index (`index.tar.gz`). This is the single source of truth.
--   **Sentence Transformer Model:** The `all-MiniLM-L6-v2` model is loaded into memory on startup. It is responsible for converting incoming text queries into vector embeddings that can be understood by the search index.
+-   **Sentence Transformer Model:** The `BAAI/bge-large-en-v1.5` model is loaded into memory on startup. It is responsible for converting incoming text queries into vector embeddings. This model **MUST** match the model specified in the `index_manifest.json` of the downloaded index, a contract that is strictly enforced at service startup to prevent compatibility failures.  
 -   **ChromaDB:** The vector database engine. It is initialized on startup from the index downloaded from OCI and performs the high-speed cosine similarity search.
 -   **Redis:** A high-speed, in-memory caching layer. It stores the results of identical queries to reduce latency and offload work from the embedding model and ChromaDB.
 
