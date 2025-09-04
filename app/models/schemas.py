@@ -24,6 +24,7 @@ class HealthResponse(BaseModel):
     version: str
     index_status: IndexStatus
     redis_status: str = Field("unknown", description="Connection status to Redis cache ('connected' or 'disconnected').")
+    reranker_status: str = Field("unknown", description="Status of the reranker model ('loaded', 'error', 'disabled').")
     index_last_modified: Optional[datetime] = None
     resource_usage: ResourceUsage
     index_branch: Optional[str] = Field(None, description="The git branch of the loaded index.")

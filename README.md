@@ -32,109 +32,93 @@ The service is designed for efficient CPU-based inference for embedding and sear
 
 ## Deployment & Operations
 
+
 ### Environment Variables
 
--   `OCI_BUCKET_NAME`: The name of the OCI bucket where indexes are stored.
--   `OCI_INDEX_BRANCH`: **(Required)** The specific git branch for which this Librarian instance should fetch an index (e.g., `develop`, `main`, `feature/new-login`). This variable is used to construct the final object path.
--   `OCI_INDEX_OBJECT_NAME`: **(DEPRECATED)** This variable should no longer be set directly. The service will construct the correct path dynamically using the pattern `indexes/{OCI_INDEX_BRANCH}/latest/index.tar.gz`.
+All configuration is managed via environment variables, typically loaded from a `.env` file.
 
+-   `OCI_BUCKET_NAME`: **(Required)** The name of the OCI bucket where indexes are stored.
+-   `OCI_INDEX_BRANCH`: **(Required)** The specific git branch for which this Librarian instance should fetch an index (e.g., `develop`, `main`). The service constructs the final object path dynamically using this value.
+-   `LIBRARIAN_API_KEY_FILE`: **(Required for Docker Compose)** Path to the Docker secret file containing the API key. Set to `/run/secrets/librarian_api_key` by default.
+-   `OCI_CONFIG_PATH`: **(Local Development Only)** Path inside the container to the OCI config file. Should be unset in production.
+-   `REDIS_URL`: The connection URL for the Redis cache.
+-   `EMBEDDING_MODEL_NAME`: The name of the embedding model to download and use. Must match the model used to build the index.
+-   `RERANKER_MODEL_NAME`: The name of the Cross-Encoder model to use for reranking.
+-   `RERANKING_ENABLED`: Set to `true` to enable the two-stage reranking pipeline.
 
-### 1. Prerequisites
-- Docker & Docker Compose
-- An OCI account with an Object Storage bucket.
-- **For Local Development:** OCI credentials (`~/.oci/config`) configured on the host machine.
+### Deployment Models
 
-### 2. Deployment Models
+This service supports two primary deployment models.
 
-This service supports two deployment models to align with best practices.
+#### A) Production Deployment (Recommended: OCI Instance Principals)
 
-#### A) Local Development Setup (using OCI Key Files)
+This is the most secure method and requires no key files.
 
-This method is ideal for local testing and development. It mounts your local OCI key file into the container.
+1.  Ensure the OCI Compute Instance has an IAM policy allowing it to read objects from the target bucket.
+2.  In your production environment configuration (e.g., `.env` file), **DO NOT set the `OCI_CONFIG_PATH` variable.** The service will automatically detect and use the instance principal.
+3.  In your container orchestration definition, **REMOVE** the volume mount for OCI credentials.
+4.  Deploy the container. Authentication is automatic and secure.
 
-**Host Preparation (First-Time Setup):**
-Before the first deployment, prepare the host environment to securely provide OCI credentials to the container.
+#### B) Local Development Setup (using OCI Key Files)
+
+This method mounts your local OCI key file into the container for testing.
+
+**1. Host Preparation (One-Time Setup):**
+Prepare a system-level directory to avoid potential SELinux issues with home directories.
 
 ```bash
-# 1. Create a system-level directory for OCI credentials to avoid SELinux issues.
+# Create a secure, system-level directory
 sudo mkdir -p /opt/oci
 
-# 2. Copy your OCI config and key file to the new location.
+# Copy your OCI config and key file
 sudo cp ~/.oci/config ~/.oci/your_api_key.pem /opt/oci/
 
-# 3. IMPORTANT: Edit the config file to use a portable path for the key_file.
-#    Change 'key_file=/home/your_user/.oci/your_api_key.pem' to 'key_file=~/.oci/your_api_key.pem'
+# IMPORTANT: Edit the config to use a portable path for the key file.
+# Change 'key_file=/home/your_user/.oci/your_api_key.pem' to 'key_file=~/.oci/your_api_key.pem'
 sudo nano /opt/oci/config
 
-# 4. Set secure but readable permissions.
+# Set secure permissions
 sudo chmod 644 /opt/oci/config /opt/oci/your_api_key.pem
 ```
 
-**Running with Docker Compose:**
+**2. Running with Docker Compose:**
 The provided `docker-compose.yml` is pre-configured for this method.
 
 ```bash
-# 1. Create the secrets file (only needed once).
+# 1. Create the API key secret file (if it doesn't exist).
 mkdir -p secrets
 echo -n "your-super-secret-key-here" > ./secrets/librarian_api_key.txt
 
 # 2. Create and configure your .env file.
 cp .env.example .env
-nano .env # Set OCI_BUCKET_NAME and OCI_CONFIG_PATH=/home/appuser/.oci/config
+# Edit .env and set OCI_BUCKET_NAME, OCI_INDEX_BRANCH, and
+# OCI_CONFIG_PATH=/home/appuser/.oci/config
+nano .env
 
 # 3. Build and start the services.
 docker compose up --build -d
 ```
 
-#### B) Production Deployment (Recommended: using OCI Instance Principals)
+## Integration Contract for Index Producers
 
-**Deployment Steps:**
+Any external system (e.g., a CI/CD pipeline) that generates and uploads an index for consumption by this Librarian service **MUST** adhere to the following contract. This ensures compatibility and prevents silent failures.
 
-1.  Ensure the OCI Compute Instance has the necessary IAM policies (e.g., `allow dynamic-group MyLibrarianInstances to read objects in compartment MyCompartment where target.bucket.name = 'my-librarian-bucket'`).
-2.  In your production `.env` file or environment configuration, **DO NOT** set the `OCI_CONFIG_PATH` variable. The application will automatically detect the instance principal environment.
-3.  In your production `docker-compose.yml` or container orchestration definition, **REMOVE** the volume mount for OCI credentials:
-    ```yaml
-    # In your production compose file, this volume mount should be DELETED:
-    # - /opt/oci:/home/appuser/.oci:ro,z 
-    ```
-4.  Deploy the container as usual. The service will authenticate automatically and securely.
+### 1. OCI Object Storage Path
 
-### 2. Host Preparation (First-Time Setup for OCI Credentials)
-Before the first deployment, prepare the host environment to securely provide OCI credentials to the container.
+The index producer **MUST** upload the compressed archive (`index.tar.gz`) to a path that matches the following structure, which the Librarian service dynamically constructs:
 
-```bash
-# 1. Create a system-level directory for OCI credentials to avoid SELinux issues.
-sudo mkdir -p /opt/oci
+-   **Path Structure:** `indexes/{branch_name}/latest/index.tar.gz`
+-   **Example:** For the `develop` branch, the object must be at `indexes/develop/latest/index.tar.gz`.
 
-# 2. Copy your OCI config and key file to the new location.
-#    (Replace 'oci_api_key.pem' if your key file has a different name)
-sudo cp ~/.oci/config ~/.oci/oci_api_key.pem /opt/oci/
+### 2. The `index_manifest.json` Contract
 
-# 3. IMPORTANT: Edit the config file to use a portable path for the key_file.
-#    Change 'key_file=/home/your_user/.oci/oci_api_key.pem' to 'key_file=~/.oci/oci_api_key.pem'
-sudo nano /opt/oci/config
+The producer **MUST** create an `index_manifest.json` file at the root of the archive. The Librarian service treats this file as the single source of truth for the artifact's configuration. The manifest **MUST** contain the following keys:
 
-# 4. Set secure but readable permissions.
-sudo chmod 644 /opt/oci/config
-sudo chmod 644 /opt/oci/oci_api_key.pem
-```
+-   `embedding_model`: The exact Hugging Face name of the sentence-transformer model used to create the embeddings (e.g., `BAAI/bge-large-en-v1.5`).
+-   `chroma_collection_name`: The exact name of the collection created within the ChromaDB instance.
+-   `branch`: The source control branch the index was built from.
 
-### 3. Running with Docker Compose
-The service now uses Docker-managed named volumes, which simplifies setup and improves reliability.
-
-```bash
-# 1. Create the secrets file (only needed once).
-mkdir -p secrets
-echo -n "your-super-secret-key-here" > ./secrets/librarian_api_key.txt
-
-# 2. Create and configure your .env file.
-cp .env.example .env
-nano .env # Set your OCI_BUCKET_NAME
-
-# 3. Build and start the services.
-#    Docker will automatically create and manage the 'librarian_chroma_data' volume.
-docker compose up --build -d
-```
+The Librarian service will **fail to start** if its own configured `EMBEDDING_MODEL_NAME` does not match the `embedding_model` value in the manifest, providing a critical safety check against model mismatch.
 
 ## Index Management
 

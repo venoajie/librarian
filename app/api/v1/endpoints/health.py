@@ -37,7 +37,18 @@ async def get_health(
     """
     app_state = request.app.state
     index_status = getattr(app_state, 'index_status', IndexStatus.LOADING)
-    service_status = HealthStatus.OK if index_status == IndexStatus.LOADED else HealthStatus.DEGRADED
+
+    # Note: The reranker status logic from the previous fix is included here for completeness.
+    reranker_status = "disabled"
+    is_reranker_healthy = True
+    if settings.RERANKING_ENABLED:
+        if getattr(app_state, 'reranker_model', None):
+            reranker_status = "loaded"
+        else:
+            reranker_status = "error"
+            is_reranker_healthy = False
+
+    service_status = HealthStatus.OK if index_status == IndexStatus.LOADED and is_reranker_healthy else HealthStatus.DEGRADED
 
     if service_status == HealthStatus.DEGRADED:
         response.status_code = http_status.HTTP_503_SERVICE_UNAVAILABLE
@@ -65,13 +76,14 @@ async def get_health(
     collection_name = None
     if collection := getattr(app_state, 'chroma_collection', None):
         collection_name = collection.name
-
+    # 1. Initialize index_branch to None.
     index_branch = None
+    # 2. If the index is loaded, prioritize the manifest as the source of truth.
     if index_status == IndexStatus.LOADED:
         if manifest := getattr(app_state, 'index_manifest', None):
             index_branch = manifest.get("branch")
         else:
-            # This case indicates a state inconsistency, which is good to log.
+            # This case indicates a state inconsistency, which is important to log.
             logger.warning("Index status is LOADED but no index_manifest found in app state.")
     
     return HealthResponse(
@@ -79,8 +91,10 @@ async def get_health(
         version=request.app.version,
         index_status=index_status,
         redis_status=redis_status, 
+        reranker_status=reranker_status,
         index_last_modified=getattr(app_state, 'index_last_modified', None),
         resource_usage=resource_usage,
-        index_branch=settings.OCI_INDEX_BRANCH if index_status == IndexStatus.LOADED else None,
+        # 3. Use the variable populated from the manifest, not the settings.
+        index_branch=index_branch,
         chroma_collection=collection_name
     )
