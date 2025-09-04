@@ -109,16 +109,16 @@ The service's behavior is strictly defined by its Pydantic schemas and API endpo
     -   `resource_usage`: Real-time `cpu_load_percent` and `memory_usage_percent`.
 
 ### 5.2. `POST /api/v1/context`
--   **Purpose:** The core function. Retrieves relevant context chunks for a given query.
+-   **Purpose:** The core function. Retrieves relevant, and optionally filtered, context chunks for a given query.
 -   **Authentication:** Required. A valid API key **MUST** be provided in the `X-API-KEY` header.
 -   **Request Model (`ContextRequest`):**
     -   `query`: The user's text query.
     -   `max_results`: The desired number of context chunks.
+    -   `filters` (Optional): A dictionary specifying key-value pairs for metadata filtering. The service passes this directly to the vector database's `where` clause, supporting advanced operators like `$and`.
 -   **Response Model (`ContextResponse`):**
     -   `query_id`: A unique UUID for the request.
-    -   `context`: A list of `ContextChunk` objects, each containing `content`, `metadata`, and `score`.
+    -   `context`: A list of `ContextChunk` objects, each containing `content`, `metadata` (now enriched), and `score`.
     -   `processing_time_ms`: The total server-side processing time.
-
 ---
 
 ## 6. Build System & Packaging
