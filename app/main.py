@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
 from pathlib import Path
 from datetime import datetime
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
@@ -48,12 +48,30 @@ async def load_dependencies(app: FastAPI):
     thread_pool = app.state.thread_pool
 
     try:
+        # --- Load Embedding Model ---
         logger.info("Loading sentence-transformer model into memory...")
         model_name = settings.EMBEDDING_MODEL_NAME
         app.state.embedding_model = await loop.run_in_executor(
             thread_pool, lambda: SentenceTransformer(model_name)
         )
         logger.info(f"Model '{model_name}' loaded successfully.")
+
+        # --- Load Reranker Model (if enabled) ---
+        if settings.RERANKING_ENABLED:
+            logger.info("Reranking is enabled. Loading CrossEncoder model...")
+            reranker_model_name = settings.RERANKER_MODEL_NAME
+            try:
+                app.state.reranker_model = await loop.run_in_executor(
+                    thread_pool, lambda: CrossEncoder(reranker_model_name)
+                )
+                logger.info(f"Reranker model '{reranker_model_name}' loaded successfully.")
+            except Exception as e:
+                app.state.reranker_model = None
+                logger.error(f"Failed to load reranker model '{reranker_model_name}': {e}", exc_info=True)
+                # Do not raise; the service can run in a degraded state without the reranker.
+        else:
+            logger.info("Reranking is disabled by configuration.")
+
     except Exception as e:
         app.state.embedding_model = None
         app.state.index_status = IndexStatus.NOT_FOUND
@@ -149,6 +167,7 @@ async def lifespan(app: FastAPI):
     app.state.index_status = IndexStatus.LOADING
     app.state.index_last_modified = None
     app.state.embedding_model = None
+    app.state.reranker_model = None
     app.state.chroma_collection = None
     app.state.index_manifest = None
     

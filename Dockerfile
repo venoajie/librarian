@@ -19,22 +19,21 @@ WORKDIR /app
 
 COPY pyproject.toml .
 # --- OPTIMIZATION 1: Install CPU-only PyTorch ---
-# By using the PyTorch CPU-only index, we avoid downloading the massive CUDA
-# libraries, dramatically reducing the final image size. This service is
-# designed for CPU-based inference.
 RUN uv pip install torch --extra-index-url https://download.pytorch.org/whl/cpu && \
     uv pip install --no-cache --strict .
 
 # --- OPTIMIZATION 2: Dedicated, minimal model downloader stage ---
-# This stage starts from the clean 'base', not the heavy 'builder'
 FROM base AS model_downloader
 ARG EMBEDDING_MODEL_NAME
+ARG RERANKER_MODEL_NAME # NEW: Add reranker model arg
 ARG HF_HOME=/opt/huggingface_cache
 ENV HUGGINGFACE_HUB_CACHE=${HF_HOME}
-# Install only the single library needed to download the model
-RUN uv pip install sentence-transformers
-# Download the model
+# Install only the single library needed to download the models
+RUN uv pip install sentence-transformers==3.0.1
+# Download the embedding model
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('${EMBEDDING_MODEL_NAME}', cache_folder='${HF_HOME}')"
+# NEW: Download the reranker model
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('${RERANKER_MODEL_NAME}', cache_folder='${HF_HOME}')"
 
 # Stage 3: Runtime - Final, lean image
 FROM base AS runtime
