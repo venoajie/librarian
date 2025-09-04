@@ -1,0 +1,36 @@
+
+
+# --- Standard Exclusions ---
+# These are always safe to ignore.
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+node_modules/
+build/
+dist/
+.idea/
+.vscode/
+*.egg-info/
+
+# --- AI Assistant Specific Exclusions ---
+# Ignore the tool's own operational directories.
+.ai_rag_index/
+.ai_sessions/
+ai_runs/
+
+# --- Trading App Specific Exclusions ---
+# Be very specific. Do NOT use broad patterns like 'config/' or 'data/'.
+
+# Correctly ignore the top-level data directory containing the database.
+# The leading and trailing slashes anchor it to the root and mark it as a directory.
+/data/
+
+# If you have a specific secrets directory at the root, ignore it like this.
+/secrets/
+
+# Ignore only the test fixtures, not the entire /tests/ directory.
+/tests/fixtures/
