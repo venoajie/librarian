@@ -1,7 +1,7 @@
 #app\core\config.py
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, root_validator
+from pydantic import Field, root_validator, model_validator
 from typing import Optional
 
 class Settings(BaseSettings):
@@ -21,6 +21,15 @@ class Settings(BaseSettings):
       
     EMBEDDING_MODEL_NAME: str = Field("BAAI/bge-large-en-v1.5", env="EMBEDDING_MODEL_NAME")
     STARTUP_TIMEOUT_SECONDS: int = Field(300, env="STARTUP_TIMEOUT_SECONDS")
+    
+    # --- Reranking Configuration ---
+    RERANKING_ENABLED: bool = Field(True, env="RERANKING_ENABLED")
+    RERANKER_MODEL_NAME: str = Field("cross-encoder/ms-marco-MiniLM-L-6-v2", env="RERANKER_MODEL_NAME")
+    RERANK_CANDIDATE_POOL_SIZE: int = Field(
+        25, 
+        gt=0, 
+        description="Number of initial candidates to retrieve from vector search for reranking."
+    )
     
     # API Authentication (supports Docker secrets)
     LIBRARIAN_API_KEY: Optional[str] = Field(None, env="LIBRARIAN_API_KEY")
@@ -71,5 +80,12 @@ class Settings(BaseSettings):
             raise ValueError("OCI_INDEX_BRANCH must be set to derive the object name.")
             
         return values
+
+    @model_validator(mode='after')
+    def validate_reranking_pool(self) -> 'Settings':
+        if self.RERANKING_ENABLED and self.RERANK_CANDIDATE_POOL_SIZE < 5:
+             # A pool size this small defeats the purpose of reranking.
+            raise ValueError("RERANK_CANDIDATE_POOL_SIZE must be at least 5 when reranking is enabled.")
+        return self
 
 settings = Settings()
