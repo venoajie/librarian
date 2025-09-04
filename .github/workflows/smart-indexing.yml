@@ -27,6 +27,7 @@ env:
   OCI_BUCKET: ${{ vars.OCI_BUCKET }}
   OCI_REGION: ${{ vars.OCI_REGION }}
   BRANCH_NAME: ${{ github.ref_name }}
+  PROJECT_NAME: ${{ github.event.repository.name }}
 
 jobs:
   index-codebase:
@@ -205,21 +206,21 @@ jobs:
              exit 1
           fi
 
-          echo "Uploading archive to OCI..."
+          echo "Uploading archive to OCI..."         
           oci os object put --force \
             --namespace "${OCI_NAMESPACE}" \
             --bucket-name "${OCI_BUCKET}" \
-            --name "indexes/${{ env.BRANCH_NAME }}/archive/${TIMESTAMP}_${{ github.sha }}.tar.gz" \
+            --name "indexes/${{ env.PROJECT_NAME }}/${{ env.BRANCH_NAME }}/archive/${TIMESTAMP}_${{ github.sha }}.tar.gz" \
             --file index.tar.gz
           
           oci os object put --force \
             --namespace "${OCI_NAMESPACE}" \
             --bucket-name "${OCI_BUCKET}" \
-            --name "indexes/${{ env.BRANCH_NAME }}/latest/index.tar.gz" \
+            --name "indexes/${{ env.PROJECT_NAME }}/${{ env.BRANCH_NAME }}/latest/index.tar.gz" \
             --file index.tar.gz
           
-          echo "::notice::Successfully uploaded index for branch ${{ env.BRANCH_NAME }}"
-
+          echo "::notice::Successfully uploaded index for project ${{ env.PROJECT_NAME }}, branch ${{ env.BRANCH_NAME }}"
+          
       - name: Create Failure Issue
         if: failure()
         uses: actions/github-script@v6
