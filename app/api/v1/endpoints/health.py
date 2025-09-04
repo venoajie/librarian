@@ -66,6 +66,14 @@ async def get_health(
     if collection := getattr(app_state, 'chroma_collection', None):
         collection_name = collection.name
 
+    index_branch = None
+    if index_status == IndexStatus.LOADED:
+        if manifest := getattr(app_state, 'index_manifest', None):
+            index_branch = manifest.get("branch")
+        else:
+            # This case indicates a state inconsistency, which is good to log.
+            logger.warning("Index status is LOADED but no index_manifest found in app state.")
+    
     return HealthResponse(
         status=service_status,
         version=request.app.version,

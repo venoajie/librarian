@@ -19,7 +19,25 @@ A standalone, containerized FastAPI service that acts as a centralized, secure, 
 - **Docker Compose Integration:** A `docker-compose.yml` is provided for streamlined local development and testing, now using reliable named volumes.
 - **Operational Runbook:** This README now serves as a comprehensive guide for deployment, monitoring, and troubleshooting.
 
+## Performance & Deployment Notes
+
+### CPU-Only Inference
+
+The official Docker image for the Librarian service is deliberately built with a **CPU-only version of PyTorch**. This is an architectural decision to optimize for:
+
+*   **Smaller Image Size:** Reduces storage costs and speeds up deployment.
+*   **Lower Operational Cost:** The service can be run on standard, cost-effective CPU instances without the need for expensive GPU hardware.
+
+The service is designed for efficient CPU-based inference for embedding and search operations. When provisioning resources, you do not need to consider GPU availability.
+
 ## Deployment & Operations
+
+### Environment Variables
+
+-   `OCI_BUCKET_NAME`: The name of the OCI bucket where indexes are stored.
+-   `OCI_INDEX_BRANCH`: **(Required)** The specific git branch for which this Librarian instance should fetch an index (e.g., `develop`, `main`, `feature/new-login`). This variable is used to construct the final object path.
+-   `OCI_INDEX_OBJECT_NAME`: **(DEPRECATED)** This variable should no longer be set directly. The service will construct the correct path dynamically using the pattern `indexes/{OCI_INDEX_BRANCH}/latest/index.tar.gz`.
+
 
 ### 1. Prerequisites
 - Docker & Docker Compose
@@ -70,12 +88,7 @@ docker compose up --build -d
 
 #### B) Production Deployment (Recommended: using OCI Instance Principals)
 
-
-**[WARNING] CURRENTLY BLOCKED (As of 2025-09-02):** The Instance Principal method is currently non-functional due to a service-side OCI IAM issue (Oracle SR `[Enter SR#]`). The current production deployment **MUST** use the "Local Development Setup" method below until this is resolved. This is tracked as technical debt `LIBRARIAN-TD-001`.
-
-This is the **architecturally mandated** and most secure method for production. It requires running the container on an OCI Compute Instance that has been granted the correct IAM policies to access the Object Storage bucket. This method **eliminates the need for key files** on the server.
-
-**Deployment Steps (Once platform issue is resolved):**
+**Deployment Steps:**
 
 1.  Ensure the OCI Compute Instance has the necessary IAM policies (e.g., `allow dynamic-group MyLibrarianInstances to read objects in compartment MyCompartment where target.bucket.name = 'my-librarian-bucket'`).
 2.  In your production `.env` file or environment configuration, **DO NOT** set the `OCI_CONFIG_PATH` variable. The application will automatically detect the instance principal environment.

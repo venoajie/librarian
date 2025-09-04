@@ -202,3 +202,17 @@ The effectiveness of the RAG system depends on how source code is chunked and ve
 -   **Configuration Clarity:** When adding new environment variables in configuration files, add a comment explaining the purpose and effect of that variable.
 
 Conversely, the indexing and chunking strategy itself is not sacred. If a common coding pattern in our repository is producing poor chunks, the `create_index.py` script **SHOULD** be refined to better understand our specific code structure. This creates a feedback loop where our coding style and our indexing tools evolve together to optimize the quality of the generated knowledge base.
+
+
+## 12. Deployment & Operational Governance
+
+### 12.1. Mandate for CPU-Centric Deployment
+
+The Librarian RAG service is architected as a cost-effective, general-purpose utility. To ensure maximum portability, low operational overhead, and simplicity in deployment, the canonical container image for this service **MUST** be built using a CPU-only version of the PyTorch library.
+
+**Rationale:**
+*   **Cost Efficiency:** Eliminates the requirement for expensive GPU-enabled compute instances, making the service accessible for a wider range of use cases.
+*   **Simplicity:** Avoids the complexity of managing NVIDIA drivers, CUDA versions, and specialized container runtimes (e.g., `nvidia-docker`).
+*   **Sufficient Performance:** For its intended use case of on-demand query embedding, CPU performance is adequate and does not justify the cost and complexity of a GPU-based deployment.
+
+This mandate prioritizes accessibility and low cost over maximum possible throughput. If a high-throughput, GPU-accelerated version is required in the future, it **MUST** be provided as a separate, explicitly named artifact (e.g., `Dockerfile.gpu`) and not as a replacement for the default CPU-based image.
