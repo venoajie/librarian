@@ -46,13 +46,15 @@ async def get_context(
     """
     start_time = time.monotonic()
     
-    # Create a canonical cache key that includes query, max_results, and sorted filters.
+    # Create a canonical cache key that includes the query, max_results, and a sorted representation of the filters.
     normalized_query = body.query.lower().strip()
     cache_key_parts = [normalized_query, str(body.max_results)]
     if body.filters:
+        # Sort the keys to ensure {'a': 1, 'b': 2} and {'b': 2, 'a': 1} produce the same key.
         sorted_filters = orjson.dumps(body.filters, option=orjson.OPT_SORT_KEYS).decode()
         cache_key_parts.append(sorted_filters)
     
+    # Join all parts and hash for a clean, unique key.
     cache_key_string = ":".join(cache_key_parts)
     query_hash = hashlib.md5(cache_key_string.encode()).hexdigest()
     log_query_id = f"query_hash:{query_hash[:8]}"
@@ -84,7 +86,7 @@ async def get_context(
     except Exception as e:
         logger.error(f"Redis cache check failed for {log_query_id}: {e}", exc_info=True)
 
-    logger.info(f"Cache miss for {log_query_id}")
+    logger.info(f"Cache miss for {log_query_id} with filters: {body.filters}")
 
     if not chroma_collection:
         raise HTTPException(
