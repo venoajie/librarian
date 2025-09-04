@@ -33,6 +33,7 @@ class HealthResponse(BaseModel):
 class ContextRequest(BaseModel):
     query: str = Field(..., min_length=3, max_length=512, description="The user query.")
     max_results: int = Field(5, gt=0, le=20, description="Max number of results.")
+    filters: Optional[dict[str, Any]] = Field(None, description="Key-value pairs to filter metadata. Example: {'language': 'python', 'is_test_file': false}")
 
     @validator("query")
     def query_must_not_be_empty(cls, v):
