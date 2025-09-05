@@ -2,29 +2,37 @@
 # This configuration is specific to the "My Trading App" project.
 
 general:
+  # This is a good practice for project-specific session management.
+  # Remember to add 'my_custom_sessions/' to your .gitignore file.
+  sessions_directory: "my_custom_sessions"
+  
   # This is the most powerful feature for project-specific work.
   # These files will be automatically attached to EVERY prompt you run
   # from within this project directory.
   auto_inject_files:
-    - "PROJECT_BLUEPRINT_V2.5.md"
-    - "AMBIGUITY_REPORT.md"    
-    - "AGENTS.md"
+    - "PROJECT_BLUEPRINT.md"
 
     
 rag:
   # This is the most important setting. It enables the cloud workflow.
   embedding_model_name: 'BAAI/bge-large-en-v1.5' # <-- Merged from the CI step
   enable_branch_awareness: true
-  enable_reranking: true
+
+  # Explicitly load the DATABASE_URL from the environment ---
+  # This ensures the YAML merge doesn't discard the value.
+  database_url: ${DATABASE_URL}
+
+  # Reference the LIBRARIAN_API_URL from your .env file
+  librarian_url: ${LIBRARIAN_API_URL}
+  librarian_api_key: ${LIBRARIAN_API_KEY}
   
-  # Configure the connection to your shared OCI bucket
+  # The number of final context chunks to request from the Librarian.
+  rerank_top_n: 5
+    
   oracle_cloud:
-    # The OCI namespace where your bucket resides
-    namespace: "frpowqeyehes"
-    # The name of the bucket storing the index archives
-    bucket: "my-trading-app-rag-indexes-dev-fra"
-    # The OCI region for the bucket
-    region: "eu-frankfurt-1"
+    namespace: ${OCI_NAMESPACE}
+    bucket: ${OCI_BUCKET}
+    region: ${OCI_REGION}
 
     
 tools:

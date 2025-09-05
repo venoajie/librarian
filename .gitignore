@@ -6,6 +6,11 @@ __pycache__/
 # C extensions
 *.so
 
+# Ignore the local, user-specific prompt library.
+# This directory is for private or experimental prompts that should not be
+# committed to the shared repository.
+my_custom_sessions/
+
 # Distribution / packaging
 .Python
 build/

@@ -1,11 +1,17 @@
 # .github/workflows/smart-indexing.yml
 
-name: Smart RAG Indexing
+name: Smart RAG Indexing (PostgreSQL)
 
 on:
   push:
-    branches: [main, develop, 'feature/**', 'release/**']
-    paths-ignore: ['docs/**', '*.md']
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+      - 'release/**'
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
   workflow_dispatch:
     inputs:
       force_reindex:
@@ -28,14 +34,15 @@ env:
   OCI_REGION: ${{ vars.OCI_REGION }}
   BRANCH_NAME: ${{ github.ref_name }}
   PROJECT_NAME: ${{ github.event.repository.name }}
+  DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
 jobs:
   index-codebase:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     
     steps:
-      - name: Checkout Trading App Repository
+      - name: Checkout Project Repository
         uses: actions/checkout@v4
 
       - name: Checkout AI Assistant Repository
@@ -47,15 +54,8 @@ jobs:
 
       - name: Create Dynamic .aiignore for CI
         run: |
-          # Ignore the checked-out source code of the indexer itself.
           echo "my-ai-assistant/" >> .aiignore
-          
-          # Ignore transient files created by this CI workflow.
-          echo "index.tar.gz" >> .aiignore
-          echo "before_state.json" >> .aiignore
           echo "indexer_run.log" >> .aiignore
-
-          echo "::notice:: Dynamically configured .aiignore for CI run."
 
       - name: Setup Python and uv
         uses: actions/setup-python@v5
@@ -67,101 +67,80 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/uv
-          key: ${{ runner.os }}-uv-${{ hashFiles('**/pyproject.toml', '**/requirements.txt') }}
+          key: ${{ runner.os }}-uv-${{ hashFiles('**/pyproject.toml') }}
           
       - name: Create Venv and Install Dependencies
         run: |
-          # Ensure a clean environment for every run
-          rm -rf .venv
           uv venv
-          
-          # Activate venv and add it to the path for subsequent steps
           source .venv/bin/activate
-          echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH
-
-          # Install dependencies using the fresh source code
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> $GITHUB_PATH          
           uv pip install --no-cache -e ./my-ai-assistant[indexing]
-          uv pip install oci-cli
+          uv pip install --no-cache oci-cli
           
       - name: Configure Oracle Cloud CLI
-        env:
-          OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING: true
         run: |
           mkdir -p ~/.oci
-          cat > ~/.oci/config << EOF
-          [DEFAULT]
-          user=${{ secrets.OCI_USER_OCID }}
-          fingerprint=${{ secrets.OCI_FINGERPRINT }}
-          tenancy=${{ secrets.OCI_TENANCY_OCID }}
-          region=${{ env.OCI_REGION }}
-          key_file=~/.oci/api_key.pem
-          EOF
-          
+          echo "[DEFAULT]" > ~/.oci/config
+          echo "user=${{ secrets.OCI_USER_OCID }}" >> ~/.oci/config
+          echo "fingerprint=${{ secrets.OCI_FINGERPRINT }}" >> ~/.oci/config
+          echo "tenancy=${{ secrets.OCI_TENANCY_OCID }}" >> ~/.oci/config
+          echo "region=${{ env.OCI_REGION }}" >> ~/.oci/config
+          echo "key_file=~/.oci/api_key.pem" >> ~/.oci/config
           echo "${{ secrets.OCI_API_KEY }}" > ~/.oci/api_key.pem
-          chmod 600 ~/.oci/api_key.pem
-          chmod 600 ~/.oci/config
-          oci os ns get
+          chmod 600 ~/.oci/api_key.pem ~/.oci/config
         
-      - name: Download Previous Index
-        id: download_previous
+      - name: Download Previous State File for Incremental Indexing
+        id: download_state
         run: |
-          INDEX_DIR=".ai_rag_index"
-          # CORRECTED PATH: Use the project name to get the correct previous index.
-          OBJECT_PATH="indexes/${{ env.PROJECT_NAME }}/${{ env.BRANCH_NAME }}/latest/index.tar.gz"
-
-          echo "Attempting to download previous index for project '${{ env.PROJECT_NAME }}' from path: ${OBJECT_PATH}"
-          rm -rf "${INDEX_DIR}"
-
-          if oci os object get --namespace "${OCI_NAMESPACE}" --bucket-name "${OCI_BUCKET}" --name "${OBJECT_PATH}" --file index.tar.gz; then
-            echo "Previous index downloaded successfully. Unpacking..."
-            mkdir -p "${INDEX_DIR}"
-            tar -xzf index.tar.gz -C "${INDEX_DIR}"
-            
-            if [ -f "${INDEX_DIR}/state.json" ]; then
-              echo "✅ state.json found. Incremental delta indexing is now possible."
-              echo "unpacked=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::state.json NOT FOUND after unpacking. This should not happen with a valid index. Forcing a full re-index as a safeguard."
-              echo "unpacked=false" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "No previous index found for this project and branch. A full re-index will be performed."
-            echo "unpacked=false" >> "$GITHUB_OUTPUT"
-          fi
+          STAGING_DIR=".ai_rag_index"
+          mkdir -p "${STAGING_DIR}"
+          STATE_FILE="${STAGING_DIR}/state.json"
           
+          echo "Attempting to download previous state.json..."
+          
+          # Attempt download. If it fails (e.g., 404), the 'oci' command will return non-zero.
+          # We capture the exit code to decide if it was successful.
+          if oci os object get \
+            --namespace "${OCI_NAMESPACE}" \
+            --bucket-name "${OCI_BUCKET}" \
+            --name "indexes/${PROJECT_NAME}/${BRANCH_NAME}/latest/state.json" \
+            --file "${STATE_FILE}" \
+            --auth api_key; then
+            
+            echo "✅ Previous state.json downloaded successfully."
+            echo "state_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            # OCI command failed (e.g., 404). This is expected for a new index.
+            echo "No previous state.json found or download failed. A full re-index will be performed."
+            echo "state_exists=false" >> "$GITHUB_OUTPUT"
+            # Ensure the file is not present if download failed
+            rm -f "${STATE_FILE}"
+          fi
+        shell: /usr/bin/bash -e {0}
+
       - name: Determine Indexing Mode
         id: mode
         run: |
           if [[ "${{ github.event.inputs.force_reindex }}" == "true" ]]; then
             echo "Forcing full re-index due to manual trigger."
             echo "mode=full" >> $GITHUB_OUTPUT
-          elif [[ "${{ steps.download_previous.outputs.unpacked }}" == "true" ]]; then
-            echo "Previous index found. Performing delta index."
+          elif [[ "${{ steps.download_state.outputs.state_exists }}" == "true" ]]; then
+            echo "Previous state found. Performing delta index."
             echo "mode=delta" >> $GITHUB_OUTPUT
           else
-            echo "No previous index. Performing full re-index."
+            echo "No previous state. Performing full re-index."
             echo "mode=full" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create CI-Specific AI Config
-        run: |
-          cat > .ai_config.yml << EOF
-          tools:
-            shell:
-              allowed_commands: []
-          EOF
-
-      - name: Save Pre-run State for Comparison
-        if: steps.mode.outputs.mode == 'delta'
-        run: |
-          if [ -f ".ai_rag_index/state.json" ]; then
-            cp .ai_rag_index/state.json before_state.json
-            echo "::notice::Backed up pre-run state.json for post-run comparison."
           fi
 
       - name: Run Indexer
         id: indexer_run
+        # --- FIX: Pass the secret via a step-level environment variable ---
+        # This is the safest way to handle secrets with special characters.
+        env:
+          DB_URL_SECRET: ${{ secrets.DATABASE_URL }}
         run: |
+          set -o pipefail
+          
           INDEXER_ARGS=""
           if [[ "${{ steps.mode.outputs.mode }}" == "full" ]]; then
             INDEXER_ARGS="--force-reindex"
@@ -170,22 +149,36 @@ jobs:
             echo "::notice::Starting indexer in DELTA (incremental) mode."
           fi
           
-          # Execute the module directly from source to ensure the latest code is run.
-          python -m ai_assistant.indexer . --branch "${{ env.BRANCH_NAME }}" $INDEXER_ARGS 2>&1 | tee indexer_run.log
-          
-      - name: Report on Indexing Changes
-        if: steps.mode.outputs.mode == 'delta' && steps.indexer_run.outcome == 'success'
+          # The shell now passes the variable without interpreting its content.
+          python -m ai_assistant.indexer . \
+            --branch "${{ env.BRANCH_NAME }}" \
+            --database-url "$DB_URL_SECRET" \
+            $INDEXER_ARGS 2>&1 | tee indexer_run.log
+
+      - name: Sanity Check Indexing Results
+        if: steps.indexer_run.outcome == 'success'
         run: |
-          echo "::group::Analyzing Delta Indexing Results"
-          if [ -f "before_state.json" ] && [ -f ".ai_rag_index/state.json" ]; then
-            BEFORE_COUNT=$(jq 'keys | length' before_state.json)
-            AFTER_COUNT=$(jq 'keys | length' .ai_rag_index/state.json)
-            DIFF=$((AFTER_COUNT - BEFORE_COUNT))
-            
-            echo "File count in state.json -> Before: $BEFORE_COUNT | After: $AFTER_COUNT | New Files Added: $DIFF"
+          echo "::group::Performing Sanity Check on Indexing Output"
+          STATE_FILE=".ai_rag_index/state.json"
+          if [ ! -f "$STATE_FILE" ]; then
+            echo "::error::Sanity check failed! state.json was not created by the indexer."
+            exit 1
+          fi
+          
+          FILE_COUNT=$(jq '. | length' "$STATE_FILE")
+          MINIMUM_EXPECTED_FILES=100
+
+          echo "Files in final state: $FILE_COUNT"
+          echo "Minimum expected: $MINIMUM_EXPECTED_FILES"
+
+          if [ "$FILE_COUNT" -lt "$MINIMUM_EXPECTED_FILES" ]; then
+            echo "::error::Sanity check failed! The number of indexed files is suspiciously low."
+            exit 1
+          else
+            echo "✅ Sanity check passed."
           fi
           echo "::endgroup::"
-
+          
       - name: Upload Indexer Log Artifact
         if: always()
         uses: actions/upload-artifact@v4
@@ -193,37 +186,6 @@ jobs:
           name: indexer-log-${{ github.sha }}
           path: indexer_run.log
 
-      - name: Upload Index to Object Storage
-        run: |
-          INDEX_DIR=".ai_rag_index"
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          
-          echo "Archiving the new index..."
-          tar -czf index.tar.gz -C "${INDEX_DIR}" .
-          
-          echo "Verifying archive contents before upload..."
-          if tar -tzf index.tar.gz | grep -q "state.json"; then
-             echo "✅ state.json confirmed to be in the archive."
-          else
-             echo "::error::CRITICAL FAILURE: state.json was NOT added to the archive. Halting upload."
-             exit 1
-          fi
-
-          echo "Uploading archive to OCI..."         
-          oci os object put --force \
-            --namespace "${OCI_NAMESPACE}" \
-            --bucket-name "${OCI_BUCKET}" \
-            --name "indexes/${{ env.PROJECT_NAME }}/${{ env.BRANCH_NAME }}/archive/${TIMESTAMP}_${{ github.sha }}.tar.gz" \
-            --file index.tar.gz
-          
-          oci os object put --force \
-            --namespace "${OCI_NAMESPACE}" \
-            --bucket-name "${OCI_BUCKET}" \
-            --name "indexes/${{ env.PROJECT_NAME }}/${{ env.BRANCH_NAME }}/latest/index.tar.gz" \
-            --file index.tar.gz
-          
-          echo "::notice::Successfully uploaded index for project ${{ env.PROJECT_NAME }}, branch ${{ env.BRANCH_NAME }}"
-          
       - name: Create Failure Issue
         if: failure()
         uses: actions/github-script@v6
