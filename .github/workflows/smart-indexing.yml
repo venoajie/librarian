@@ -106,26 +106,29 @@ jobs:
         id: download_previous
         run: |
           INDEX_DIR=".ai_rag_index"
-          echo "Attempting to download previous index..."
+          # CORRECTED PATH: Use the project name to get the correct previous index.
+          OBJECT_PATH="indexes/${{ env.PROJECT_NAME }}/${{ env.BRANCH_NAME }}/latest/index.tar.gz"
+
+          echo "Attempting to download previous index for project '${{ env.PROJECT_NAME }}' from path: ${OBJECT_PATH}"
           rm -rf "${INDEX_DIR}"
 
-          if oci os object get --namespace "${OCI_NAMESPACE}" --bucket-name "${OCI_BUCKET}" --name "indexes/${BRANCH_NAME}/latest/index.tar.gz" --file index.tar.gz; then
+          if oci os object get --namespace "${OCI_NAMESPACE}" --bucket-name "${OCI_BUCKET}" --name "${OBJECT_PATH}" --file index.tar.gz; then
             echo "Previous index downloaded successfully. Unpacking..."
             mkdir -p "${INDEX_DIR}"
             tar -xzf index.tar.gz -C "${INDEX_DIR}"
             
             if [ -f "${INDEX_DIR}/state.json" ]; then
-              echo "✅ state.json found. Incremental indexing is possible."
+              echo "✅ state.json found. Incremental delta indexing is now possible."
               echo "unpacked=true" >> "$GITHUB_OUTPUT"
             else
-              echo "::error::state.json NOT FOUND after unpacking. Forcing a full re-index."
+              echo "::error::state.json NOT FOUND after unpacking. This should not happen with a valid index. Forcing a full re-index as a safeguard."
               echo "unpacked=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "No previous index found. A full re-index will be performed."
+            echo "No previous index found for this project and branch. A full re-index will be performed."
             echo "unpacked=false" >> "$GITHUB_OUTPUT"
           fi
-
+          
       - name: Determine Indexing Mode
         id: mode
         run: |
