@@ -1,8 +1,10 @@
 # app\core\index_manager.py
 
 import oci
-import tarfile
 import logging
+import orjson
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from .config import settings
 
@@ -14,17 +16,14 @@ def _get_oci_signer():
     Determines the appropriate OCI authentication method, prioritizing Instance Principal.
     """
     try:
-        # Preferred method for production environments on OCI
         logger.info("Attempting OCI Instance Principal authentication...")
         signer = oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
-        # Config is minimal as the signer handles most details
         config = {"region": signer.region}
         logger.info("Successfully authenticated using OCI Instance Principal.")
         return config, signer
     except Exception:
         logger.warning("Instance Principal authentication failed. Falling back to OCI config file.")
         
-        # Fallback method for local development or as a temporary workaround
         if not settings.OCI_CONFIG_PATH or not Path(settings.OCI_CONFIG_PATH).exists():
             logger.error(f"OCI_CONFIG_PATH '{settings.OCI_CONFIG_PATH}' is not configured or file does not exist for fallback authentication.")
             raise oci.exceptions.ConfigFileNotFound("OCI config file not found for fallback authentication.")
@@ -41,17 +40,13 @@ def _get_oci_signer():
         logger.info("Successfully authenticated using OCI config file.")
         return config, signer
 
-def download_index_from_oci(destination_path: Path):
-    """
-    Downloads the index archive from OCI Object Storage using the best available auth method.
-    """
+def _blocking_download_and_parse_manifest():
+    """Synchronous helper to be run in a thread pool."""
     logger.info(f"Attempting to download '{settings.OCI_INDEX_OBJECT_NAME}' from bucket '{settings.OCI_BUCKET_NAME}'...")
-    
     try:
         config, signer = _get_oci_signer()
         object_storage_client = oci.object_storage.ObjectStorageClient(config, signer=signer)
         
-        # Namespace is often needed and can be retrieved using the authenticated client.
         namespace = object_storage_client.get_namespace().data
 
         get_obj = object_storage_client.get_object(
@@ -60,28 +55,22 @@ def download_index_from_oci(destination_path: Path):
             object_name=settings.OCI_INDEX_OBJECT_NAME
         )
         
-        destination_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(destination_path, 'wb') as f:
-            for chunk in get_obj.data.raw.stream(1024 * 1024, decode_content=False):
-                f.write(chunk)
-        
-        logger.info("Successfully downloaded index from OCI.")
-        return True
+        manifest_content = get_obj.data.raw.read()
+        logger.info("Successfully downloaded manifest from OCI.")
+        return orjson.loads(manifest_content)
     except oci.exceptions.ServiceError as e:
-        logger.error(f"OCI Service Error: Failed to download index. Status: {e.status}. Message: {e.message}", exc_info=True)
-        return False
+        logger.error(f"OCI Service Error: Failed to download manifest. Status: {e.status}. Message: {e.message}", exc_info=True)
+        raise
     except Exception as e:
-        logger.error(f"An unexpected error occurred during OCI download: {e}", exc_info=True)
-        return False
+        logger.error(f"An unexpected error occurred during OCI download or parsing: {e}", exc_info=True)
+        raise
 
-def unpack_index(archive_path: Path, destination_dir: Path):
-    logger.info(f"Unpacking '{archive_path}' to '{destination_dir}'...")
-    try:
-        destination_dir.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(archive_path, "r:gz") as tar:
-            tar.extractall(path=destination_dir)
-        logger.info("Index successfully unpacked.")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to unpack index archive: {e}", exc_info=True)
-        return False
+async def download_manifest_from_oci(executor: ThreadPoolExecutor):
+    """
+    Downloads and parses the index manifest from OCI Object Storage asynchronously.
+    """
+    loop = asyncio.get_running_loop()
+    manifest_data = await loop.run_in_executor(
+        executor, _blocking_download_and_parse_manifest
+    )
+    return manifest_data

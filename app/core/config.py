@@ -40,16 +40,14 @@ class Settings(BaseSettings):
     RATE_LIMIT_TIMEFRAME: str = Field("100/minute", env="RATE_LIMIT_TIMEFRAME")
 
     # OCI Object Storage
-    # OCI_CONFIG_PATH is optional, as it's not needed for Instance Principal auth.
     OCI_CONFIG_PATH: Optional[str] = Field(None, env="OCI_CONFIG_PATH")
     OCI_BUCKET_NAME: str = Field(..., env="OCI_BUCKET_NAME")
     OCI_PROJECT_NAME: str = Field(..., env="OCI_PROJECT_NAME")
     OCI_INDEX_BRANCH: str = Field(..., env="OCI_INDEX_BRANCH")
     OCI_INDEX_OBJECT_NAME: Optional[str] = None # This will be derived
 
-    # ChromaDB
-    CHROMA_DB_PATH: str = Field("/data/chroma", env="CHROMA_DB_PATH")
-    CHROMA_COLLECTION_NAME: str = Field("codebase_collection", env="CHROMA_COLLECTION_NAME")
+    # PostgreSQL Database
+    DATABASE_URL: str = Field(..., env="DATABASE_URL")
 
     # Redis Cache
     REDIS_URL: str = Field("redis://localhost:6379/0", env="REDIS_URL")
@@ -60,7 +58,6 @@ class Settings(BaseSettings):
         """
         Load secrets from files and derive dynamic configuration values after initial load.
         """
-        # Load API key from file if specified
         api_key_file = values.get("LIBRARIAN_API_KEY_FILE")
         if api_key_file:
             try:
@@ -72,11 +69,10 @@ class Settings(BaseSettings):
         if not values.get("LIBRARIAN_API_KEY"):
             raise ValueError("LIBRARIAN_API_KEY must be set, either via environment variable or LIBRARIAN_API_KEY_FILE.")
             
-        # Derive the full OCI object name from project and branch
         project = values.get("OCI_PROJECT_NAME")
         branch = values.get("OCI_INDEX_BRANCH")            
         if project and branch:
-            values["OCI_INDEX_OBJECT_NAME"] = f"indexes/{project}/{branch}/latest/index.tar.gz"
+            values["OCI_INDEX_OBJECT_NAME"] = f"indexes/{project}/{branch}/latest/index_manifest.json"
         else:
             raise ValueError("OCI_PROJECT_NAME and OCI_INDEX_BRANCH must be set to derive the object name.")
             
@@ -85,7 +81,6 @@ class Settings(BaseSettings):
     @model_validator(mode='after')
     def validate_reranking_pool(self) -> 'Settings':
         if self.RERANKING_ENABLED and self.RERANK_CANDIDATE_POOL_SIZE < 5:
-             # A pool size this small defeats the purpose of reranking.
             raise ValueError("RERANK_CANDIDATE_POOL_SIZE must be at least 5 when reranking is enabled.")
         return self
 

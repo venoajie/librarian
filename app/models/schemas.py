@@ -15,7 +15,7 @@ class IndexStatus(str, Enum):
     NOT_FOUND = "not_found"
 
 class ResourceUsage(BaseModel):
-    cpu_load_percent: float = Field(..., description="Current system-wide CPU load in percent. NOTE: The first reading after startup may be 0.0.")
+    cpu_load_percent: float = Field(..., description="Current system-wide CPU load in percent.")
     memory_usage_percent: float = Field(..., description="Current system-wide memory usage in percent.")
     
 class HealthResponse(BaseModel):
@@ -23,12 +23,13 @@ class HealthResponse(BaseModel):
     status: HealthStatus
     version: str
     index_status: IndexStatus
+    db_status: str = Field("unknown", description="Connection status to PostgreSQL database ('connected' or 'disconnected').")
     redis_status: str = Field("unknown", description="Connection status to Redis cache ('connected' or 'disconnected').")
     reranker_status: str = Field("unknown", description="Status of the reranker model ('loaded', 'error', 'disabled').")
     index_last_modified: Optional[datetime] = None
     resource_usage: ResourceUsage
     index_branch: Optional[str] = Field(None, description="The git branch of the loaded index.")
-    chroma_collection: Optional[str] = Field(None, description="The name of the loaded ChromaDB collection.")
+    db_table_name: Optional[str] = Field(None, description="The name of the active PostgreSQL table.")
 
 class ContextRequest(BaseModel):
     query: str = Field(..., min_length=3, max_length=512, description="The user query.")

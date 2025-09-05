@@ -8,16 +8,16 @@ import asyncio
 import sys 
 import orjson
 import redis.asyncio as redis
-import chromadb
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor 
 from fastapi import FastAPI
 from fastapi.responses import ORJSONResponse
-from pathlib import Path
 from datetime import datetime
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import text
 
 from app.core.limiter import limiter
 from app.core.config import settings
@@ -48,100 +48,70 @@ async def load_dependencies(app: FastAPI):
     thread_pool = app.state.thread_pool
 
     try:
-        # --- Load Embedding Model ---
+        # --- Load Models ---
         logger.info("Loading sentence-transformer model into memory...")
-        model_name = settings.EMBEDDING_MODEL_NAME
         app.state.embedding_model = await loop.run_in_executor(
-            thread_pool, lambda: SentenceTransformer(model_name)
+            thread_pool, lambda: SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
         )
-        logger.info(f"Model '{model_name}' loaded successfully.")
+        logger.info(f"Model '{settings.EMBEDDING_MODEL_NAME}' loaded successfully.")
 
-        # --- Load Reranker Model (if enabled) ---
         if settings.RERANKING_ENABLED:
             logger.info("Reranking is enabled. Loading CrossEncoder model...")
-            reranker_model_name = settings.RERANKER_MODEL_NAME
             try:
                 app.state.reranker_model = await loop.run_in_executor(
-                    thread_pool, lambda: CrossEncoder(reranker_model_name)
+                    thread_pool, lambda: CrossEncoder(settings.RERANKER_MODEL_NAME)
                 )
-                logger.info(f"Reranker model '{reranker_model_name}' loaded successfully.")
+                logger.info(f"Reranker model '{settings.RERANKER_MODEL_NAME}' loaded successfully.")
             except Exception as e:
                 app.state.reranker_model = None
-                logger.error(f"Failed to load reranker model '{reranker_model_name}': {e}", exc_info=True)
-                # Do not raise; the service can run in a degraded state without the reranker.
-        else:
-            logger.info("Reranking is disabled by configuration.")
-
+                logger.error(f"Failed to load reranker model: {e}", exc_info=True)
     except Exception as e:
         app.state.embedding_model = None
         app.state.index_status = IndexStatus.NOT_FOUND
         logger.critical(f"CRITICAL: Failed to load sentence-transformer model: {e}", exc_info=True)
         raise
 
-    archive_path = Path("/tmp/index.tar.gz")
-    index_path = Path(settings.CHROMA_DB_PATH)
-    
     try:
-        downloaded = await loop.run_in_executor(
-            thread_pool, index_manager.download_index_from_oci, archive_path
+        # --- Download Manifest and Connect to DB ---
+        logger.info("Downloading index manifest from OCI...")
+        manifest = await index_manager.download_manifest_from_oci(thread_pool)
+        app.state.index_manifest = manifest
+        
+        index_model_name = manifest.get("embedding_model")
+        if index_model_name != settings.EMBEDDING_MODEL_NAME:
+            raise RuntimeError(
+                f"FATAL MODEL MISMATCH: Librarian model='{settings.EMBEDDING_MODEL_NAME}', "
+                f"Index model='{index_model_name}'. Halting startup."
+            )
+        logger.info("Index compatibility check passed.")
+
+        db_table_name = manifest.get("db_table_name")
+        if not db_table_name:
+            raise RuntimeError("Manifest integrity check failed: 'db_table_name' not found.")
+        
+        app.state.db_table_name = db_table_name
+        logger.info(f"Manifest loaded. Using database table: {db_table_name}")
+
+        logger.info("Creating PostgreSQL connection pool...")
+        app.state.db_engine = create_async_engine(
+            settings.DATABASE_URL, 
+            pool_size=10, 
+            max_overflow=5,
+            pool_recycle=1800 # Recycle connections every 30 mins
         )
+        
+        async with app.state.db_engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        
+        logger.info("Database connection successful. Service is now fully operational.")
+        app.state.index_status = IndexStatus.LOADED
+        app.state.index_last_modified = datetime.utcnow()
 
-        if downloaded and await loop.run_in_executor(
-            thread_pool, index_manager.unpack_index, archive_path, index_path
-        ):
-            manifest_path = index_path / "index_manifest.json"
-            if not manifest_path.exists():
-                raise RuntimeError("Index integrity check failed: index_manifest.json not found in the unpacked archive.")
-            
-            manifest_content = manifest_path.read_bytes()
-            manifest = orjson.loads(manifest_content)
-            
-            app.state.index_manifest = manifest
-            
-            index_model_name = manifest.get("embedding_model")
-            librarian_model_name = settings.EMBEDDING_MODEL_NAME
-
-            logger.info(
-                f"Verifying index compatibility: "
-                f"Librarian model='{librarian_model_name}', "
-                f"Index model='{index_model_name}'"
-            )
-
-            if index_model_name != librarian_model_name:
-                raise RuntimeError(
-                    f"FATAL MODEL MISMATCH: The Librarian is configured to use '{librarian_model_name}', "
-                    f"but the downloaded index was built with '{index_model_name}'. Halting startup."
-                )
-            logger.info("Index compatibility check passed.")
-
-            collection_name_from_manifest = manifest.get("chroma_collection_name")
-            if not collection_name_from_manifest:
-                raise RuntimeError("Index integrity check failed: 'chroma_collection_name' not found in manifest.")
-
-            chroma_client = await loop.run_in_executor(
-                thread_pool, lambda: chromadb.PersistentClient(path=str(index_path))
-            )
-
-            logger.info(f"Attempting to load ChromaDB collection from manifest: {collection_name_from_manifest}")
-
-            app.state.chroma_collection = await loop.run_in_executor(
-                thread_pool, lambda: chroma_client.get_collection(
-                    name=collection_name_from_manifest,
-                )
-            )
-
-            app.state.index_status = IndexStatus.LOADED
-            app.state.index_last_modified = datetime.utcnow()            
-            logger.info(f"ChromaDB index '{collection_name_from_manifest}' loaded successfully. Service is now fully operational.")
-        else:
-            app.state.chroma_collection = None
-            app.state.index_status = IndexStatus.NOT_FOUND
-            logger.error("Index setup failed due to download or unpacking error.")
-            raise RuntimeError("Failed to download or unpack the index from OCI.")
     except Exception as e:
-        app.state.chroma_collection = None
+        app.state.db_engine = None
+        app.state.db_table_name = None
         app.state.index_status = IndexStatus.NOT_FOUND
-        logger.error(f"Failed to load ChromaDB collection: {e}", exc_info=True)
+        logger.error(f"Failed to initialize database connection from manifest: {e}", exc_info=True)
         raise
 
 async def timed_load_wrapper(app: FastAPI):
@@ -162,13 +132,12 @@ async def lifespan(app: FastAPI):
     logger.info(f"Starting Librarian Service v{settings.SERVICE_VERSION}")
     
     app.state.thread_pool = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
-    logger.info(f"Initialized bounded thread pool with {settings.MAX_WORKERS} workers.")
-
     app.state.index_status = IndexStatus.LOADING
     app.state.index_last_modified = None
     app.state.embedding_model = None
     app.state.reranker_model = None
-    app.state.chroma_collection = None
+    app.state.db_engine = None
+    app.state.db_table_name = None
     app.state.index_manifest = None
     
     try:
@@ -183,16 +152,15 @@ async def lifespan(app: FastAPI):
     startup_task.add_done_callback(_handle_startup_errors)
     
     logger.info("Application startup complete. Now listening for requests.")
-    logger.info("Index and model loading will continue in the background.")
     yield
     
     logger.info("Shutting down Librarian Service.")
     if app.state.redis_client:
         await app.state.redis_client.close()
-        logger.info("Redis connection closed.")
-    
+    if app.state.db_engine:
+        await app.state.db_engine.dispose()
     app.state.thread_pool.shutdown()
-    logger.info("Thread pool shut down.")
+    logger.info("Shutdown complete.")
 
 app = FastAPI(
     title="Librarian RAG Service",
