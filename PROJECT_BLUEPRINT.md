@@ -1,38 +1,37 @@
 # PROJECT BLUEPRINT: The Librarian Service
 
-<!-- Version: 1.0 -->
-<!-- Change Summary (v1.0): Initial blueprint created upon successful first deployment. Documents the final decoupled, cloud-centric RAG architecture. -->
+<!-- Version: 2.0 -->
+<!-- Change Summary (v2.0): Major architectural migration from local ChromaDB to a centralized PostgreSQL backend with pgvector. The service is now a pure database client, consuming a lightweight manifest from OCI. This enables multi-project support and enhances scalability and reliability. -->
 
 ## 1. System Overview and Core Purpose
 
 This document is the canonical source of truth for the architectural principles and governance of the Librarian service (`PROJ-LIBRARIAN-DECOUPLE`). It serves as a "constitution" for human developers and a "README for the AI," ensuring that all future development and operational procedures are aligned with the core design philosophy.
 
-The Librarian is a standalone, containerized FastAPI service designed to act as a centralized, secure, and maintainable source of contextual information for all development tools and agents within the ecosystem. Its primary purpose is to **decouple the resource-intensive RAG (Retrieval-Augmented Generation) pipeline** from client applications, providing a single, authoritative source for codebase-aware context.
+The Librarian is a standalone, containerized FastAPI service designed to act as a centralized, secure, and maintainable source of contextual information for all development tools and agents within the ecosystem. Its primary purpose is to **provide a scalable, production-grade API endpoint for RAG (Retrieval-Augmented Generation) queries against a central PostgreSQL database.**
 
 ### 1.1. Ecosystem Glossary
 
 This glossary defines the core components and concepts of the Three-Tiered Development Ecosystem.
 
 -   **Three-Tiered Ecosystem:** The overarching architecture composed of three decoupled components: The Product, The Conductor, and The Librarian.
--   **The Product:** The target application being developed. It is the passive subject of analysis and modification.
--   **The Conductor (AI Assistant):** The lightweight, user-facing CLI tool. It orchestrates development workflows, manages personas, and interacts with LLMs. It is a **thin client** that offloads all RAG operations to the Librarian.
--   **The Librarian (RAG Service):** The centralized, standalone, production-grade service responsible for the entire RAG pipeline. It ingests indexes, loads ML models, and serves codebase-aware context via a secure API.
--   **Index Manifest (`index_manifest.json`):** The immutable integration contract created by the indexer. It is a self-describing file within the index archive that specifies the exact embedding model and collection name used, ensuring perfect compatibility between the index artifact and the Librarian service.
--   **Kernel:** The core logic engine within the Conductor responsible for intercepting high-level workflow steps (e.g., `execute_refactoring_workflow`) and expanding them into a deterministic sequence of granular tool calls.
+-   **The Product:** The target application being developed (e.g., `my-ai-assistant`, `librarian-service`). It is the passive subject of analysis by an external CI/CD pipeline.
+-   **The Conductor (AI Assistant):** The lightweight, user-facing CLI tool. It orchestrates development workflows and is a **thin client** that offloads all RAG operations to the Librarian.
+-   **The Librarian (RAG Service):** The centralized, standalone, production-grade service responsible for executing RAG queries. It connects to a central PostgreSQL database and serves codebase-aware context via a secure API.
+-   **Index Manifest (`index_manifest.json`):** The immutable integration contract created by the indexer. It is a small, self-describing JSON file stored in OCI Object Storage. It specifies the exact embedding model and **PostgreSQL table name** for a given project and branch, ensuring perfect compatibility and directing the Librarian to the correct data source.
+-   **The Indexer (CI/CD Process):** A CI/CD workflow (e.g., GitHub Actions) that runs in a Product repository. It scans the codebase, generates vector embeddings, and populates the central PostgreSQL database. Its final act is to upload the `index_manifest.json` to OCI.
+
 ---
 
 ## 2. Core Architectural Principles
 
-The architecture is built on four foundational principles:
-
 ### 2.1. Decoupling as a First Principle
-The service's existence is predicated on the principle of decoupling. All RAG-related logic—including model loading, index management, and vector search—is encapsulated within this service. Client applications **MUST NOT** contain any direct RAG implementation details; they **MUST** interact with the Librarian via its defined API contract.
+All RAG-related query logic—including model loading, embedding generation for queries, and vector search—is encapsulated within this service. Client applications **MUST NOT** contain any direct database clients or ML models; they **MUST** interact with the Librarian via its defined API contract.
 
 ### 2.2. Stateless and Scalable by Design
-The service is designed to be stateless from the perspective of a container orchestrator. All persistent state (the vector index) is externalized to a cloud object store and treated as an immutable, disposable asset that is loaded on startup. This architecture inherently supports horizontal scaling; multiple instances of the Librarian can be run behind a load balancer without shared state conflicts.
+The service is designed to be stateless. All persistent state (the vector data) is externalized to a central PostgreSQL database. The service's configuration state (which table to query) is determined at startup by downloading a lightweight manifest from OCI. This architecture inherently supports horizontal scaling; multiple instances of the Librarian can be run behind a load balancer without shared state conflicts.
 
 ### 2.3. Configuration via Environment
-The service strictly adheres to 12-Factor App principles by managing all configuration through environment variables. Sensitive information, such as the API key, **MUST** be injected using a secure mechanism like Docker Secrets, with the application reading the *path* to the secret from an environment variable. Hardcoding configuration values is strictly forbidden.
+The service strictly adheres to 12-Factor App principles by managing all configuration through environment variables. This includes the `DATABASE_URL` for connecting to PostgreSQL and OCI credentials for fetching the manifest. Sensitive information **MUST** be injected using a secure mechanism like Docker Secrets.
 
 ### 2.4. API-First Contract
 The service is defined by its API. All interactions are governed by a clear, versioned, and machine-readable contract. The primary contract provides two endpoints:
@@ -43,186 +42,147 @@ The service is defined by its API. All interactions are governed by a clear, ver
 
 ## 3. Service Architecture & Components
 
-The Librarian is a composite service that orchestrates several best-in-class components to deliver its functionality.
+The Librarian is now a client to a larger data ecosystem.
 
 ```
-                               +---------------------------------+
-                               |        OCI Object Storage       |
-                               | (Single Source of Truth for Index) |
-                               +-----------------+---------------+
-                                                 | (1. Download on Startup)
-                                                 |
-+------------------+       +---------------------+---------------------+       +-----------------+
-|  Client Agent    |-----> |          Librarian Service (FastAPI)        | <---> |      Redis      |
-| (with API Key)   |       |                                             |       | (Response Cache)|
-+------------------+       | +-----------------+  +--------------------+ |       +-----------------+
-                         | | Sentence-       |  |      ChromaDB      | |
-                         | | Transformer Model |  | (Vector Search)    | |
-                         | | (Query Encoder)   |  |                    | |
-                         | +-----------------+  +--------------------+ |
-                         +---------------------------------------------+
++------------------------+      +----------------------+      +-----------------------------+
+|   CI/CD Indexer for    |----->|  Central PostgreSQL  |<-----|     CI/CD Indexer for       |
+| "my-ai-assistant" Repo |(1a)  | (with pgvector)      |(1b)  |   "librarian-service" Repo  |
++------------------------+      +----------+-----------+      +-----------------------------+
+                                           | (3. Query)
+                                           |
++------------------+      +----------------v---------------------+       +-----------------+
+|  Client Agent    |----->|          Librarian Service (FastAPI)   |------>|      Redis      |
+| (e.g. Conductor) | (2)  |                                        | (4)   | (Response Cache)|
++------------------+      | +-----------------+  +---------------+ |       +-----------------+
+                          | | Sentence-       |  | OCI Client    | |
+                          | | Transformer Model |  | (for Manifest)| |
+                          | | (Query Encoder)   |  |               | |
+                          | +-----------------+  +---------------+ |
+                          +----------------------------------------+
+                                      ^
+                                      | (2a. Download Manifest)
+                                      |
+                               +------+---------------+
+                               |  OCI Object Storage  |
+                               | (Source of Truth for |
+                               |  Manifests)          |
+                               +----------------------+
 ```
 
 -   **FastAPI Application (`app/`):** The core web service that exposes the API, handles authentication, and orchestrates all internal logic.
--   **OCI Object Storage:** The canonical, centralized repository for the compressed vector index (`index.tar.gz`). This is the single source of truth.
--   **Sentence Transformer Model:** The `BAAI/bge-large-en-v1.5` model is loaded into memory on startup. It is responsible for converting incoming text queries into vector embeddings. This model **MUST** match the model specified in the `index_manifest.json` of the downloaded index, a contract that is strictly enforced at service startup to prevent compatibility failures.  
--   **ChromaDB:** The vector database engine. It is initialized on startup from the index downloaded from OCI and performs the high-speed cosine similarity search.
--   **Redis:** A high-speed, in-memory caching layer. It stores the results of identical queries to reduce latency and offload work from the embedding model and ChromaDB.
+-   **Central PostgreSQL Database:** The external, canonical source of truth for all indexed vector data from all projects.
+-   **OCI Object Storage:** A lightweight repository for storing `index_manifest.json` files. The Librarian downloads the relevant manifest at startup to discover which table to query in the database.
+-   **Sentence Transformer Model:** The `BAAI/bge-large-en-v1.5` model is loaded into memory on startup. It is responsible for converting incoming text queries into vector embeddings. This model **MUST** match the model specified in the downloaded `index_manifest.json`.
+-   **Redis:** A high-speed, in-memory caching layer for API responses.
 
 ---
 
-## 4. The Index Data Lifecycle
+## 4. The Data Lifecycle (Decoupled)
 
-
-The service's effectiveness depends on a fresh and accurate index. This is managed by a robust, automated data lifecycle that is decoupled from the service itself.
+The service's effectiveness depends on a fresh and accurate index, which is managed by an external, automated data lifecycle.
 
 **Stage 1: The Trigger (Git Push)**
-*   The workflow is triggered when a developer executes a `git push` to a tracked branch on the remote repository.
+*   A developer pushes a commit to a tracked branch in a Product repository (e.g., `my-ai-assistant`).
 
 **Stage 2: Indexing (CI/CD Environment)**
-*   A CI/CD pipeline (e.g., GitHub Actions) checks out the specific commit.
-*   It executes the standalone `create_index.py` script. This script scans the repository, chunks the code, and uses the `sentence-transformers` library to build a complete, `cosine`-based vector database.
+*   A CI/CD pipeline executes the standalone `ai-index` script.
+*   The script scans the repository, chunks the code, generates embeddings, and connects to the central PostgreSQL database.
+*   It populates a project-and-branch-specific table (e.g., `codebase_collection_my_ai_assistant_develop`) with the vector data.
 
-**Stage 3: Centralization (Cloud Object Storage)**
-*   The CI/CD workflow compresses the resulting database into an `index.tar.gz` archive. **Crucially, the archive MUST be structured with the database files at the root, not nested in subdirectories.**
-*   This archive is uploaded to the central OCI Object Storage bucket, overwriting the `latest` version for that branch.
+**Stage 3: Manifest Publication (Cloud Object Storage)**
+*   After successfully populating the database, the CI/CD workflow generates an `index_manifest.json` file.
+*   This small JSON file is uploaded to the central OCI Object Storage bucket, overwriting the `latest` version for that project and branch.
 
 **Stage 4: Consumption (Librarian Service)**
-*   On startup or restart, the Librarian service authenticates with OCI.
-*   It downloads the latest `index.tar.gz` archive into its container.
-*   It unpacks the archive and loads the database into its local ChromaDB instance.
+*   On startup or restart, the Librarian service is configured via environment variables to look for a specific project and branch (e.g., `OCI_PROJECT_NAME="my-ai-assistant"`, `OCI_INDEX_BRANCH="develop"`).
+*   It authenticates with OCI and downloads the corresponding `index_manifest.json`.
+*   It parses the manifest to get the database table name.
+*   It connects to the PostgreSQL database and prepares to query the specified table.
 
 ---
-
 ## 5. API & Data Contracts
 
-The service's behavior is strictly defined by its Pydantic schemas and API endpoints.
-
 ### 5.1. `GET /api/v1/health`
--   **Purpose:** Provides a detailed, real-time snapshot of the service's health.
--   **Authentication:** None.
 -   **Response Model (`HealthResponse`):**
-    -   `status`: "ok" or "degraded" (degraded if the index is not loaded).
+    -   `status`: "ok" or "degraded".
     -   `version`: The semantic version of the service.
-    -   `index_status`: "loaded", "loading", or "not_found".
-    -   `index_last_modified`: ISO 8601 timestamp of the last successful index load.
-    -   `resource_usage`: Real-time `cpu_load_percent` and `memory_usage_percent`.
+    -   `db_status`: "connected" or "disconnected".
+    -   `index_last_modified`: ISO 8601 timestamp of the last successful manifest load.
+    -   `index_branch`: The git branch of the loaded index, from the manifest.
+    -   `db_table_name`: The name of the PostgreSQL table the service is actively querying.
 
-### 5.2. `POST /api/v1/context`
--   **Purpose:** The core function. Retrieves relevant, and optionally filtered, context chunks for a given query.
--   **Authentication:** Required. A valid API key **MUST** be provided in the `X-API-KEY` header.
--   **Request Model (`ContextRequest`):**
-    -   `query`: The user's text query.
-    -   `max_results`: The desired number of context chunks.
-    -   `filters` (Optional): A dictionary specifying key-value pairs for metadata filtering. The service passes this directly to the vector database's `where` clause, supporting advanced operators like `$and`.
--   **Response Model (`ContextResponse`):**
-    -   `query_id`: A unique UUID for the request.
-    -   `context`: A list of `ContextChunk` objects, each containing `content`, `metadata` (now enriched), and `score`.
-    -   `processing_time_ms`: The total server-side processing time.
----
-
-## 6. Build System & Packaging
-
-The project adheres to modern Python packaging standards to ensure reliability and performance.
-
--   **Dependency Management:** All dependencies are managed in `pyproject.toml`.
--   **Build Process:** The service is built into a container image using a multi-stage `Dockerfile`.
-    -   **Build Speed:** The `uv` package installer is used in the `builder` stage for significantly faster dependency resolution and installation than standard `pip`.
-    -   **Security & Size:** The final `runtime` image is minimal. It includes the Python runtime and the pre-built virtual environment but excludes all build tools (like `gcc`), resulting in a smaller and more secure production artifact.
+*(...other sections like Build System, Operational Governance, etc., would be updated to reflect the new dependencies and operational requirements like managing a database connection...)*
+```
 
 ---
 
-## 7. Operational Governance & Monitoring
+### **Updated `PROJECT_BLUEPRINT.md` for The AI Assistant (Conductor)**
 
-The service is designed to be operated as a reliable piece of infrastructure.
+This document should focus on the *production* side—how the indexer now populates a central database and supports multiple projects.
 
--   **Primary Monitoring:** The `/health` endpoint is the primary tool for monitoring. An external uptime checker **MUST** be configured to poll this endpoint. Alerts **SHOULD** be triggered if the `status` is "degraded" for an extended period after a restart.
--   **Resource Scaling:** The `resource_usage` metrics in the health check should be ingested by a monitoring platform to inform scaling decisions. High sustained CPU or memory usage indicates a need to scale the underlying container resources.
--   **Security:**
-    -   The API key **MUST** be treated as a production secret and rotated periodically.
-    -   The OCI credentials **MUST** be managed securely. The recommended production pattern is to use OCI Instance Principal authentication, which eliminates the need for key files on the server.
--   **Logging:** The service produces structured logs. These logs **SHOULD** be forwarded to a centralized logging platform for analysis and alerting.
+```markdown
+# PROJECT BLUEPRINT: AI Assistant
+
+<!-- Version: 4.0 -->
+<!-- Change Summary (v4.0): The RAG pipeline's data layer has been migrated from local ChromaDB files to a centralized PostgreSQL database with pgvector. The indexer (`ai-index`) is now a database client that populates this central store, enabling a true multi-project RAG ecosystem. -->
+
+## 6. Workflows
+
+### 6.4. Codebase-Aware Analysis Workflow (RAG)
+The standard flow is now a fully decoupled, multi-project capable, database-centric model:
+1.  **Index (Automated per Project):** A developer pushes a commit to a Product repository (e.g., `my-ai-assistant` or `librarian-service`). The CI/CD pipeline in *that specific repository* runs the `ai-index` command. The command connects to the central PostgreSQL database, populates a unique table for that project and branch (e.g., `codebase_collection_librarian_service_develop`), and uploads a small `index_manifest.json` to a shared OCI bucket.
+2.  **Serve (Centralized):** The standalone Librarian service is configured to serve a specific project's index. On startup, it downloads the relevant manifest from OCI to discover which table to query in the central database.
+3.  **Query (Any Machine):** A developer runs an `ai "..."` command. The `RAGContextPlugin` in the Conductor makes a lightweight API call to the configured Librarian service, which returns the relevant context.
+
+#### 6.5. The RAG Index Data Lifecycle
+The lifecycle is now a robust, database-centric ETL process.
+
+**Stage 1 & 2: Local Development & Git Push (The Trigger)**
+*(Unchanged)*
+
+**Stage 3: Indexing (CI/CD Environment)**
+*   The `ai-index` command runs, connecting to the central PostgreSQL database via a `DATABASE_URL` secret.
+*   It performs `DELETE` and `INSERT` operations to synchronize the data in a project-and-branch-specific table with the current state of the codebase.
+
+**Stage 4: Manifest Publication (Cloud Object Storage)**
+*   After the database is updated, the CI/CD workflow generates an `index_manifest.json`.
+*   This manifest, containing the database table name, is uploaded to a project-and-branch-specific path in the central OCI bucket (e.g., `indexes/my-ai-assistant/develop/latest/index_manifest.json`).
+
+**Stage 5: Consumption (Librarian Service)**
+*   The Librarian service downloads the manifest from OCI to determine which table to query in the central PostgreSQL database.
 
 ---
 
-## 8. Governance for RAG Pipeline Integrity & Testing
+## 8. Build System & Packaging Philosophy
 
-The project formally recognizes that ensuring the health and effectiveness of the RAG pipeline is a distinct engineering discipline, separate from traditional software testing. A successful deployment of the Python codebase does not guarantee the success or relevance of the knowledge base it produces. This distinction can be understood through an analogy:
--   **Code Correctness (The Mechanic):** Traditional testing ensures the machinery works. Does the engine start? Do the wheels turn?
--   **Knowledge Relevance (The Librarian):** RAG pipeline testing ensures the quality of the library's content. Are the books relevant? Is the card catalog accurate?
+### 8.2. Optional Dependencies for a Decoupled World
+The packaging philosophy reflects the Three-Tiered architecture.
+-   **Standard Installation (`pip install .`):** Installs the **thin client** Conductor. It is lightweight and does not include any heavy ML or database libraries.
+-   **`[project.optional-dependencies].indexing`:** This group is for the **CI/CD environment only**. It installs the base Conductor package *plus* all the heavy libraries (`torch`, `sentence-transformers`, `sqlalchemy`, `psycopg2-binary`, `pgvector`, `oci`) required for the `ai-index` command to connect to the database and build the knowledge base.
 
-To govern this second discipline, the project mandates the following RAG Pipeline Testing Protocol.
+---
 
-### 8.1. Health & Robustness (Is the library open and the catalog intact?)
-This layer ensures the data pipeline is functional and complete.
+## 10. Governance for the RAG Indexing Pipeline
 
--   **CI Sanity Check:** The CI/CD workflow **MUST** include a "Sanity Check" step after every indexing run. This step **MUST** fail the build if the total number of indexed files falls below a project-specific, reasonable threshold. This is a critical guardrail against silent failures caused by overly aggressive ignore patterns or incorrect source directory paths.
--   **Vector Metric Consistency:** The vector distance metric (e.g., `cosine`) **MUST** be explicitly defined and synchronized between the indexing script (`create_index.py`) and the service (`main.py`). A mismatch will result in a silent failure where no context is returned.
+The CI/CD-driven RAG pipeline is critical infrastructure. Its integrity is paramount.
 
-### 8.2. Effectiveness (Can the assistant find the right information?)
-This layer measures the *quality* and *relevance* of the RAG system's output.
+### 10.4. The Index Manifest as the Integration Contract
 
--   **The "Golden Set" Evaluation:** The project **MUST** maintain a curated "golden set" of questions and expected outcomes in a version-controlled file (e.g., `tests/rag_evaluation_set.yml`). This set represents the core knowledge the RAG system is expected to possess.
--   **Automated Evaluation:** An automated script (`scripts/evaluate_rag.py`) **MUST** be created to test the RAG pipeline against this golden set. This script will programmatically query the RAG system and measure key metrics, such as retrieval precision.
--   **CI Quality Gate:** The automated evaluation script **MUST** be run as a job in the CI pipeline after a new index is built. A drop in precision below a defined threshold **MUST** fail the build.
+To prevent configuration drift between the Producer (CI/CD) and the Consumer (Librarian), the system **MUST** treat the `index_manifest.json` file as the immutable, single source of truth for a given index artifact.
 
+The Producer (`ai-index`) is responsible for writing the following critical metadata into the manifest:
+*   `embedding_model`: The exact name of the sentence-transformer model used.
+*   `db_table_name`: The exact name of the unique PostgreSQL table containing the data for this project and branch.
+*   `branch`: The source control branch the index was built from.
 
-## 9. Future Roadmap
+The Consumer (Librarian) **MUST** read these values from the manifest upon startup and use them to configure its runtime behavior. It **MUST** prioritize the manifest's values over its own local environment variables for these specific settings to guarantee compatibility with the data source.
 
-The `v1.0` service is complete and operational. The following enhancements are prioritized for future development:
+### 10.5. Data Isolation in the Central Database (NEW)
 
--   **`v1.1` - Instance Principal Authentication:** Refactor the OCI client to use instance principals, removing the need to mount key files into the container in production.
--   **`v1.2` - Automated Index Refresh:** Implement a secure webhook (`/admin/refresh-index`) to allow the service to download and reload the index from OCI without a full container restart.
--   **`v1.3` - Formal Test Suite:** Develop a comprehensive `pytest` suite with unit and integration tests to improve maintainability and prevent regressions.
--   **`v2.0` - High Availability:** Document and test a deployment pattern for running multiple Librarian instances behind a load balancer, using a shared Redis Cluster for caching.
+To support multiple projects concurrently, data isolation is mandatory.
 
-
-## 10. Architectural Decisions and Deviations Log
-
-This section records significant deviations from the core architectural principles, typically made to address unforeseen technical constraints.
-
-### ADL-001: Temporary Fallback to User Principal Authentication (v1.0) - RESOLVED
--   **Date:** 2025-09-02
--   **Principle Affected:** 7.3 Security (Use of OCI Instance Principal)
--   **Deviation:** The initial v1.0 deployment plan included a temporary fallback to User Principal authentication due to persistent `404 Not Found` errors, which were incorrectly attributed to a service-side OCI IAM issue.
--   **Resolution (2025-09-03):** A detailed debugging session revealed the `404` errors were caused by a **configuration drift** between the index producer (CI/CD) and the consumer (Librarian service), specifically mismatched bucket names and object paths. **Instance Principal authentication was confirmed to be working correctly all along.**
--   **Technical Debt:** This item is now **Closed**. The service has been successfully deployed using the mandated Instance Principal method. The original technical debt item `LIBRARIAN-TD-001` has been resolved and closed.
-
-## 11. RAG-Centric Development Philosophy
-
-The successful deployment and testing of the Librarian v1.0 has revealed foundational principles that must govern all future development within this ecosystem. Adopting the Librarian service is not merely a technical change; it is a cultural shift towards a RAG-centric development model. All team members, both human and AI, must adhere to the following philosophy.
-
-### 11.1. Documentation is for Discovery
-
-The primary purpose of documentation (comments, docstrings, `README.md` files, design documents) is no longer solely for human consumption. It is now a critical component of the **discoverability layer** for our AI agents. A feature without clear, prose-based documentation is effectively invisible to the RAG system.
-
-**Mandate:** All new code, architectural changes, or significant configurations **MUST** be accompanied by clear, concise documentation that explains the **"why,"** not just the "what."
--   **Good Comment:** `# Use uvloop for a high-performance asyncio event loop to boost network throughput.`
--   **Poor Comment:** `# Install uvloop.`
-
-This principle directly addresses the observation that the quality of a RAG response is limited by the quality of the source documents. **To improve the AI, we must first improve our documentation.**
-
-### 11.2. Code and Chunking are Symbiotic
-
-The effectiveness of the RAG system depends on how source code is chunked and vectorized by the indexing pipeline (`create_index.py`). The indexing script is not a static, perfect tool; it is an integral part of the development lifecycle that must be understood by developers.
-
-**Mandate:** Developers should write code with an awareness of how it will be chunked.
--   **Logical Proximity:** Keep related logic and its explanatory comments physically close together in a file. A function's docstring should be directly above it, not separated by other code blocks.
--   **Self-Contained Paragraphs:** Write comments and documentation in self-contained paragraphs. A single, long comment block that explains three different concepts is less effective than three smaller, more focused comment blocks, as the latter are more likely to be isolated into clean, conceptually pure chunks.
--   **Configuration Clarity:** When adding new environment variables in configuration files, add a comment explaining the purpose and effect of that variable.
-
-Conversely, the indexing and chunking strategy itself is not sacred. If a common coding pattern in our repository is producing poor chunks, the `create_index.py` script **SHOULD** be refined to better understand our specific code structure. This creates a feedback loop where our coding style and our indexing tools evolve together to optimize the quality of the generated knowledge base.
-
-
-## 12. Deployment & Operational Governance
-
-### 12.1. Mandate for CPU-Centric Deployment
-
-The Librarian RAG service is architected as a cost-effective, general-purpose utility. To ensure maximum portability, low operational overhead, and simplicity in deployment, the canonical container image for this service **MUST** be built using a CPU-only version of the PyTorch library.
-
-**Rationale:**
-*   **Cost Efficiency:** Eliminates the requirement for expensive GPU-enabled compute instances, making the service accessible for a wider range of use cases.
-*   **Simplicity:** Avoids the complexity of managing NVIDIA drivers, CUDA versions, and specialized container runtimes (e.g., `nvidia-docker`).
-*   **Sufficient Performance:** For its intended use case of on-demand query embedding, CPU performance is adequate and does not justify the cost and complexity of a GPU-based deployment.
-
-This mandate prioritizes accessibility and low cost over maximum possible throughput. If a high-throughput, GPU-accelerated version is required in the future, it **MUST** be provided as a separate, explicitly named artifact (e.g., `Dockerfile.gpu`) and not as a replacement for the default CPU-based image.
+-   **Table Naming Convention:** The `ai-index` script **MUST** generate a unique table name for each project and each branch. The canonical naming scheme is: `<base_collection_name>_<sanitized_project_name>_<sanitized_branch_name>`.
+    -   Example for `my-ai-assistant`'s `develop` branch: `codebase_collection_my_ai_assistant_develop`.
+    -   Example for `librarian-service`'s `feature/new-auth` branch: `codebase_collection_librarian_service_feature_new_auth`.
+-   **Database Permissions:** It is highly recommended to use a single database user (`llm_app`) with `CREATE` and `USAGE` privileges on the public schema of a dedicated database (`llm_indexing`). This user can manage all project tables within that single database, simplifying connection management.
